@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-ssr
+*.local
+
+# Rust / Tauri
+src-tauri/target
+src-tauri/Cargo.lock
+
+.DS_Store
+*.log
