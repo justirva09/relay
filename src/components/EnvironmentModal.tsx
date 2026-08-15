@@ -158,7 +158,7 @@ function EnvironmentModal({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const handleRowChange = (rowId: string, field: "key" | "value", val: string) => {
+  const handleRowChange = (rowId: string, field: "key" | "value" | "secret", val: string | boolean) => {
     const rows = tab === "globals" ? workspace.variables : selectedEnv?.variables || [];
     const updated = rows.map((r) => (r.id === rowId ? { ...r, [field]: val } : r));
     const last = updated[updated.length - 1];
@@ -225,6 +225,11 @@ function EnvironmentModal({ onClose }: { onClose: () => void }) {
               <p className="text-[11px] font-mono text-th-text-3">Global variables available in all environments. Use <span className="text-th-text-2">{"{{var}}"}</span> in URL, headers, or body.</p>
             </div>
           )}
+          {tab !== "globals" && (
+            <div className="mb-4">
+              <p className="text-[11px] font-mono text-th-text-3">Mark a variable secret to keep its value out of the committed <span className="text-th-text-2">.relay</span> file — it's written to a gitignored file instead.</p>
+            </div>
+          )}
 
           <label className="text-[11px] font-mono text-th-text-3 mb-1.5 block">Variables</label>
           <div className="flex flex-col gap-1.5">
@@ -240,8 +245,28 @@ function EnvironmentModal({ onClose }: { onClose: () => void }) {
                   value={r.value}
                   onChange={(e) => handleRowChange(r.id, "value", e.target.value)}
                   placeholder="value"
+                  type={tab !== "globals" && r.secret ? "password" : "text"}
                   className="flex-1 min-w-0 bg-th-bg border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
                 />
+                {tab !== "globals" && (
+                  <button
+                    onClick={() => handleRowChange(r.id, "secret", !r.secret)}
+                    title={r.secret ? "Secret — stored outside git" : "Mark as secret"}
+                    className={`shrink-0 h-7 w-7 grid place-items-center rounded ${r.secret ? "text-amber-400 hover:bg-amber-400/10" : "text-th-text-4 hover:text-th-text-2 hover:bg-th-hover"}`}
+                  >
+                    {r.secret ? (
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" />
+                        <path d="M7 11V7a5 5 0 0110 0v4" />
+                      </svg>
+                    ) : (
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" />
+                        <path d="M7 11V7a5 5 0 019.9-1" />
+                      </svg>
+                    )}
+                  </button>
+                )}
                 <button
                   onClick={() => handleRemoveRow(r.id)}
                   className="shrink-0 h-7 w-7 grid place-items-center rounded text-th-text-4 hover:text-rose-400 hover:bg-rose-400/10"

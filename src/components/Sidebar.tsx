@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { TreeNode } from "../types";
 import { useWorkspace } from "../store";
+import GitPanel from "./GitPanel";
 
 const METHOD_COLOR: Record<string, string> = {
   GET: "text-emerald-400",
@@ -325,10 +326,12 @@ const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 260;
 
 export default function Sidebar() {
-  const { workspace, addFolder, addRequest, addGrpcRequest, deleteNode, moveNode } = useWorkspace();
+  const { workspace, addFolder, addRequest, addGrpcRequest, deleteNode, moveNode, renameWorkspace } = useWorkspace();
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [triggerEditId, setTriggerEditId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropInfo, setDropInfo] = useState<DropInfo | null>(null);
   const [width, setWidth] = useState<number>(() => {
@@ -456,8 +459,28 @@ export default function Sidebar() {
   return (
     <div className="relative shrink-0 border-r border-th-border bg-th-sidebar flex flex-col h-full" style={{ width }}>
       <div className="h-[49px] px-3 flex items-center justify-between border-b border-th-border shrink-0">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[12.5px] font-mono text-th-text-2 tracking-wide">Collections</span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          {editingTitle ? (
+            <input
+              autoFocus
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={() => { renameWorkspace(titleDraft); setEditingTitle(false); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { renameWorkspace(titleDraft); setEditingTitle(false); }
+                if (e.key === "Escape") setEditingTitle(false);
+              }}
+              className="text-[12.5px] font-mono text-th-text-1 tracking-wide bg-th-bg border border-th-border-focus rounded px-1.5 py-0.5 min-w-0 w-full"
+            />
+          ) : (
+            <span
+              title="Double-click to rename"
+              onDoubleClick={() => { setTitleDraft(workspace.name); setEditingTitle(true); }}
+              className="text-[12.5px] font-mono text-th-text-2 tracking-wide truncate cursor-text"
+            >
+              {workspace.name || "Collections"}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <AddRequestDropdown
@@ -491,6 +514,8 @@ export default function Sidebar() {
           <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteId(id)} dragId={dragId} dropInfo={dropInfo} onItemMouseDown={handleItemMouseDown} />
         ))}
       </div>
+
+      <GitPanel />
 
       {ctxMenu && (
         <div

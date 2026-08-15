@@ -4,7 +4,7 @@ import { useTheme } from "../lib/theme";
 import { useLayout } from "../lib/layout";
 
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
-  const { importCollection, exportCollection } = useWorkspace();
+  const { importCollection, exportCollection, workspaceDir, openWorkspaceFolder } = useWorkspace();
   const { theme, toggleTheme } = useTheme();
   const { responseLayout, setResponseLayout } = useLayout();
   const [status, setStatus] = useState<string | null>(null);
@@ -77,6 +77,22 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                   Bottom
                 </button>
               </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-[12px] font-mono text-th-text-3 uppercase tracking-wide mb-2">Workspace Folder</h3>
+            <p className="text-[12px] text-th-text-3 mb-3">
+              Requests, folders, and environments are stored as plain-text <span className="font-mono">.relay</span> files in this folder, so it can live in a git repo for diffs and team collaboration.
+            </p>
+            <div className="flex items-center justify-between bg-th-bg border border-th-border rounded-md px-3 py-2.5 gap-3">
+              <span className="text-[12px] font-mono text-th-text-2 truncate">{workspaceDir || "Not set — changes are not saved to disk"}</span>
+              <button
+                onClick={() => openWorkspaceFolder()}
+                className="shrink-0 px-3 py-1.5 rounded-md text-[12.5px] font-mono border border-th-border-input text-th-text-2 hover:text-th-text-1 hover:border-th-text-4"
+              >
+                {workspaceDir ? "Switch Folder" : "Choose Folder"}
+              </button>
             </div>
           </section>
 

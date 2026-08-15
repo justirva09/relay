@@ -5,6 +5,7 @@ export interface KVRow {
   key: string;
   value: string;
   enabled: boolean;
+  secret?: boolean;
 }
 
 export type BodyMode = "none" | "json" | "text";
@@ -76,6 +77,7 @@ export interface Environment {
 }
 
 export interface Workspace {
+  name: string;
   tree: TreeNode[];
   variables: KVRow[];
   environments: Environment[];
@@ -201,8 +203,9 @@ export function defaultGrpcRequest(url = "grpc://localhost:50051"): GrpcRequestD
   };
 }
 
-export function demoWorkspace(): Workspace {
+export function demoWorkspace(name = "My Workspace"): Workspace {
   return {
+    name,
     variables: [newRow()],
     environments: [],
     activeEnvironmentId: null,

@@ -35,6 +35,29 @@ export function saveWorkspaceFile(data: string): Promise<void> {
   return invoke("save_workspace", { data });
 }
 
+export async function pickWorkspaceFolder(): Promise<string | null> {
+  const result = await open({ directory: true, multiple: false });
+  return result as string | null;
+}
+
+export function getLastWorkspaceDir(): Promise<string | null> {
+  return invoke("get_last_workspace_dir");
+}
+
+export function setLastWorkspaceDir(dir: string): Promise<void> {
+  return invoke("set_last_workspace_dir", { dir });
+}
+
+export async function loadWorkspaceDir(dir: string): Promise<string | null> {
+  const raw = await invoke<string>("load_workspace_dir", { dir });
+  if (!raw || raw === "null") return null;
+  return raw;
+}
+
+export function saveWorkspaceDir(dir: string, data: string): Promise<void> {
+  return invoke("save_workspace_dir", { dir, data });
+}
+
 export async function pickJsonFile(): Promise<string | null> {
   const result = await open({
     filters: [{ name: "JSON", extensions: ["json"] }],
@@ -66,4 +89,22 @@ export function writeFileAtPath(path: string, data: string): Promise<void> {
 
 export function listProtoFilesInDir(dir: string): Promise<{ name: string; content: string }[]> {
   return invoke("list_proto_files_in_dir", { dir });
+}
+
+export interface GitFileChange {
+  path: string;
+  status: string;
+}
+
+export interface GitStatusInfo {
+  branch: string;
+  files: GitFileChange[];
+}
+
+export function gitStatus(dir: string): Promise<GitStatusInfo | null> {
+  return invoke("git_status", { dir });
+}
+
+export function gitCommit(dir: string, message: string): Promise<void> {
+  return invoke("git_commit", { dir, message });
 }

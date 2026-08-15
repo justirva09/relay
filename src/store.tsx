@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Environment, FolderNode, GrpcLogEntry, GrpcRequestData, GrpcRequestNode, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, RequestNode, TabState, TreeNode, Workspace, defaultGrpcRequest, defaultRequest, demoWorkspace, newRow, uid } from "./types";
-import { loadWorkspaceFile, saveWorkspaceFile, pickJsonFile, pickSavePath, readFileAtPath, writeFileAtPath } from "./lib/tauri";
+import { loadWorkspaceFile, pickJsonFile, pickSavePath, readFileAtPath, writeFileAtPath, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir } from "./lib/tauri";
 import { runRequest } from "./lib/useSendRequest";
 import { isPostmanCollection, isRelayWorkspace, postmanToTree, treeToPostman } from "./lib/postman";
 import { simulateGrpcCall } from "./lib/grpcMock";
@@ -8,6 +8,12 @@ import { invokeGrpcUnary } from "./lib/grpcClient";
 
 interface Ctx {
   workspace: Workspace;
+  workspaceDir: string | null;
+  openWorkspaceFolder: () => Promise<void>;
+  pendingWorkspaceSetup: { dir: string; suggestedName: string } | null;
+  confirmWorkspaceSetup: (name: string) => Promise<void>;
+  cancelWorkspaceSetup: () => void;
+  renameWorkspace: (name: string) => void;
   tabs: TabState[];
   activeTabId: string | null;
   addFolder: (parentId: string | null) => string;
@@ -90,8 +96,26 @@ function insertAt(nodes: TreeNode[], parentId: string | null, node: TreeNode): T
   });
 }
 
+function normalizeWorkspace(raw: any, fallbackName = "My Workspace"): Workspace {
+  const ws = raw ?? {};
+  if (typeof ws.name !== "string" || !ws.name.trim()) ws.name = fallbackName;
+  if (!Array.isArray(ws.tree)) ws.tree = [];
+  if (!Array.isArray(ws.variables) || !ws.variables.length) ws.variables = [newRow()];
+  if (!Array.isArray(ws.environments)) ws.environments = [];
+  if (ws.activeEnvironmentId === undefined) ws.activeEnvironmentId = null;
+  if (!Array.isArray(ws.protoLibrary)) ws.protoLibrary = [];
+  return ws as Workspace;
+}
+
+function basenameFromPath(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || "My Workspace";
+}
+
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
-  const [workspace, setWorkspace] = useState<Workspace>({ tree: [], variables: [newRow()], environments: [], activeEnvironmentId: null, protoLibrary: [] });
+  const [workspace, setWorkspace] = useState<Workspace>({ name: "My Workspace", tree: [], variables: [newRow()], environments: [], activeEnvironmentId: null, protoLibrary: [] });
+  const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
+  const [pendingWorkspaceSetup, setPendingWorkspaceSetup] = useState<{ dir: string; suggestedName: string } | null>(null);
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
@@ -101,16 +125,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const raw = await loadWorkspaceFile();
-        if (raw) {
-          const ws = JSON.parse(raw);
-          if (!ws.environments) ws.environments = [];
-          if (ws.activeEnvironmentId === undefined) ws.activeEnvironmentId = null;
-          if (!Array.isArray(ws.protoLibrary)) ws.protoLibrary = [];
-          setWorkspace(ws);
-        } else {
-          setWorkspace(demoWorkspace());
+        const dir = await getLastWorkspaceDir();
+        if (dir) {
+          const raw = await loadWorkspaceDir(dir);
+          setWorkspace(raw ? normalizeWorkspace(JSON.parse(raw), basenameFromPath(dir)) : demoWorkspace(basenameFromPath(dir)));
+          setWorkspaceDir(dir);
+          return;
         }
+        // No .relay folder chosen yet — fall back to the legacy single-file
+        // workspace (pre-upgrade data) so it isn't lost; user picks a folder
+        // via openWorkspaceFolder to migrate it into the new format.
+        const legacyRaw = await loadWorkspaceFile();
+        setWorkspace(legacyRaw ? normalizeWorkspace(JSON.parse(legacyRaw)) : demoWorkspace());
       } catch {
         setWorkspace(demoWorkspace());
       } finally {
@@ -119,14 +145,42 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  const persist = useCallback((ws: Workspace) => {
-    saveWorkspaceFile(JSON.stringify(ws)).catch(() => {});
+  useEffect(() => {
+    if (!loaded.current || !workspaceDir) return;
+    saveWorkspaceDir(workspaceDir, JSON.stringify(workspace)).catch(() => {});
+  }, [workspace, workspaceDir]);
+
+  const openWorkspaceFolder = useCallback(async () => {
+    const dir = await pickWorkspaceFolder();
+    if (!dir) return;
+    const raw = await loadWorkspaceDir(dir);
+    if (raw) {
+      // Existing .relay workspace — its own name travels with it, no prompt needed.
+      setWorkspace(normalizeWorkspace(JSON.parse(raw), basenameFromPath(dir)));
+      await setLastWorkspaceDir(dir);
+      setWorkspaceDir(dir);
+    } else {
+      // Empty folder — ask for a name before committing anything to disk.
+      setPendingWorkspaceSetup({ dir, suggestedName: basenameFromPath(dir) });
+    }
   }, []);
 
-  useEffect(() => {
-    if (!loaded.current) return;
-    persist(workspace);
-  }, [workspace, persist]);
+  const confirmWorkspaceSetup = useCallback(async (name: string) => {
+    if (!pendingWorkspaceSetup) return;
+    const { dir } = pendingWorkspaceSetup;
+    setWorkspace((ws) => ({ ...ws, name: name.trim() || pendingWorkspaceSetup.suggestedName }));
+    await setLastWorkspaceDir(dir);
+    setWorkspaceDir(dir);
+    setPendingWorkspaceSetup(null);
+  }, [pendingWorkspaceSetup]);
+
+  const cancelWorkspaceSetup = useCallback(() => {
+    setPendingWorkspaceSetup(null);
+  }, []);
+
+  const renameWorkspace = useCallback((name: string) => {
+    setWorkspace((ws) => ({ ...ws, name: name.trim() || ws.name }));
+  }, []);
 
   const addFolder = useCallback((parentId: string | null) => {
     const node: FolderNode = { id: uid(), kind: "folder", name: "New Folder", children: [] };
@@ -496,6 +550,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<Ctx>(
     () => ({
       workspace,
+      workspaceDir,
+      openWorkspaceFolder,
+      pendingWorkspaceSetup,
+      confirmWorkspaceSetup,
+      cancelWorkspaceSetup,
+      renameWorkspace,
       tabs,
       activeTabId,
       addFolder,
@@ -527,7 +587,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       moveNode,
       setProtoLibrary,
     }),
-    [workspace, tabs, activeTabId, addFolder, addRequest, addGrpcRequest, renameNode, deleteNode, toggleCollapse, openTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, exportCollection, moveNode, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, tabs, activeTabId, addFolder, addRequest, addGrpcRequest, renameNode, deleteNode, toggleCollapse, openTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, exportCollection, moveNode, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

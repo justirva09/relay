@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod git;
 mod grpc;
 mod models;
 mod storage;
@@ -13,9 +14,15 @@ fn main() {
             commands::http_request,
             storage::load_workspace,
             storage::save_workspace,
+            storage::load_workspace_dir,
+            storage::save_workspace_dir,
+            storage::get_last_workspace_dir,
+            storage::set_last_workspace_dir,
             storage::read_file_at_path,
             storage::write_file_at_path,
             storage::list_proto_files_in_dir,
+            git::git_status,
+            git::git_commit,
             grpc::grpc_list_services,
             grpc::grpc_list_services_from_proto,
             grpc::list_proto_service_files,

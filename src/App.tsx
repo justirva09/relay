@@ -70,6 +70,74 @@ const SPLIT_MIN_H = 160;
 const SPLIT_MAX_MARGIN_H = 160;
 const SPLIT_DEFAULT_H = 340;
 
+function WorkspaceSetupModal() {
+  const { pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup } = useWorkspace();
+  const [name, setName] = useState("");
+
+  useEffect(() => {
+    setName(pendingWorkspaceSetup?.suggestedName || "");
+  }, [pendingWorkspaceSetup]);
+
+  if (!pendingWorkspaceSetup) return null;
+
+  const handleConfirm = () => {
+    confirmWorkspaceSetup(name);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-th-overlay" onClick={cancelWorkspaceSetup}>
+      <div
+        className="bg-th-surface border border-th-border rounded-lg shadow-2xl w-[380px] p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-[14px] font-semibold text-th-text-1 mb-2">Name This Workspace</h3>
+        <p className="text-[12.5px] text-th-text-3 mb-4">
+          Stored inside the workspace files, so it shows up the same for everyone who clones this folder from git.
+        </p>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleConfirm(); }}
+          className="w-full bg-th-bg border border-th-border-input rounded-md px-3 py-2 text-[13px] font-mono text-th-text-1 focus:outline-none focus:border-th-border-focus mb-4"
+        />
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={cancelWorkspaceSetup}
+            className="px-3 py-1.5 rounded text-[12.5px] text-th-text-2 hover:text-th-text-1 hover:bg-th-hover"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            className="px-3 py-1.5 rounded text-[12.5px] bg-th-accent text-white hover:bg-th-accent-hover"
+          >
+            Create
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceFolderBanner() {
+  const { workspaceDir, openWorkspaceFolder } = useWorkspace();
+  if (workspaceDir) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-2 bg-th-accent-bg border-b border-th-border text-[12.5px]">
+      <span className="text-th-accent-text">
+        No workspace folder chosen — changes aren't saved to disk yet. Pick a folder to store this collection as git-friendly `.relay` files.
+      </span>
+      <button
+        onClick={() => openWorkspaceFolder()}
+        className="shrink-0 px-3 py-1 rounded-md bg-th-accent text-white hover:bg-th-accent-hover"
+      >
+        Choose Folder
+      </button>
+    </div>
+  );
+}
+
 function Main() {
   const { workspace, tabs, activeTabId, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, setProtoLibrary } = useWorkspace();
   const activeTab = tabs.find((t) => t.nodeId === activeTabId) || null;
@@ -201,6 +269,7 @@ function Main() {
     <div className="flex h-screen w-screen bg-th-bg text-th-text-1 font-sans overflow-hidden">
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0">
+        <WorkspaceFolderBanner />
         <EnvironmentBar />
         <TabBar />
         {activeTab ? (
@@ -240,6 +309,7 @@ function Main() {
         )}
       </div>
       <UnsavedModal />
+      <WorkspaceSetupModal />
     </div>
   );
 }

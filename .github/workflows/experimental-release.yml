@@ -1,0 +1,91 @@
+name: Experimental Release
+
+# Runs automatically on every merge to main. No semantic-release / conventional
+# commits here — it just takes whatever base version is in package.json
+# (e.g. "0.2.0"), finds the latest "vBASE-experimental.N" tag, and bumps N by
+# one. Builds macOS (universal) + Windows and uploads to a draft GitHub
+# Release for manual review before publishing.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute next experimental version
+        id: bump
+        run: |
+          BASE_VERSION=$(node -p "require('./package.json').version.replace(/-experimental\.[0-9]+$/, '')")
+          LATEST_TAG=$(git tag -l "v${BASE_VERSION}-experimental.*" | sort -V | tail -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            NEXT=1
+          else
+            NEXT=$(( $(echo "$LATEST_TAG" | grep -oE '[0-9]+$') + 1 ))
+          fi
+          NEW_VERSION="${BASE_VERSION}-experimental.${NEXT}"
+          echo "Next experimental version: $NEW_VERSION"
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Tag this commit
+        run: |
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin "v${{ steps.bump.outputs.version }}"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+          - platform: windows-latest
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Set version
+        run: node scripts/set-version.mjs ${{ needs.version.outputs.version }}
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v${{ needs.version.outputs.version }}
+          releaseName: "Relay ${{ needs.version.outputs.version }}"
+          releaseBody: "Experimental build from main. See the assets below to download and install this version."
+          releaseDraft: true
+          prerelease: true
+          args: ${{ matrix.args }}
