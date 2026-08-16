@@ -239,7 +239,7 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
   const enabledHeaders = draft.headers.filter((h) => h.enabled && h.key.trim()).length;
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col h-full">
       <div className="px-4 pt-4 flex items-center gap-2">
         <MethodDropdown value={draft.method} onChange={(m) => onChange({ method: m })} />
         <UrlInput
@@ -301,7 +301,7 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
         </div>
       </div>
 
-      <div className="px-4 py-3">
+      <div className="px-4 py-3 flex-1 min-h-0 flex flex-col">
         {reqTab === "params" && (
           <div className="flex flex-col gap-4">
             <div>
@@ -383,7 +383,7 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
           </div>
         )}
         {reqTab === "scripts" && (
-          <div className="flex gap-3">
+          <div className="flex gap-3 flex-1 min-h-0">
             <div className="w-[130px] shrink-0 flex flex-col gap-0.5">
               {(
                 [
@@ -403,7 +403,7 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
                 </button>
               ))}
             </div>
-            <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+            <div className="flex-1 min-w-0 min-h-0 flex flex-col gap-1.5">
               {scriptTab === "pre" ? (
                 <>
                   <CodeEditor
@@ -412,9 +412,9 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
                     placeholder={PRE_PLACEHOLDER}
                     completions={PM_PRE_COMPLETIONS}
                     variables={variableNames}
-                    className="h-48 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
+                    className="flex-1 min-h-0 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
                   />
-                  <span className="text-[11px] text-th-text-4 font-mono">runs before send · pm.environment, pm.variables, pm.request, crypto (CryptoJS), require("crypto-js")</span>
+                  <span className="text-[11px] text-th-text-4 font-mono shrink-0">runs before send · pm.environment, pm.variables, pm.request, crypto (CryptoJS), require("crypto-js")</span>
                 </>
               ) : (
                 <>
@@ -424,9 +424,9 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
                     placeholder={TEST_PLACEHOLDER}
                     completions={PM_TEST_COMPLETIONS}
                     variables={variableNames}
-                    className="h-48 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
+                    className="flex-1 min-h-0 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
                   />
-                  <span className="text-[11px] text-th-text-4 font-mono">runs after response · pm.test, pm.expect, pm.response</span>
+                  <span className="text-[11px] text-th-text-4 font-mono shrink-0">runs after response · pm.test, pm.expect, pm.response</span>
                 </>
               )}
             </div>

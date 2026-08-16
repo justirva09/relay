@@ -2,9 +2,15 @@ name: Experimental Release
 
 # Runs automatically on every merge to main. No semantic-release / conventional
 # commits here — it just takes whatever base version is in package.json
-# (e.g. "0.2.0"), finds the latest "vBASE-experimental.N" tag, and bumps N by
-# one. Builds macOS (universal) + Windows and uploads to a draft GitHub
-# Release for manual review before publishing.
+# (e.g. "0.2.0"), finds the latest "vBASE-N" tag, and bumps N by one. Builds
+# macOS (universal) + Windows and uploads to a draft GitHub Release for
+# manual review before publishing.
+#
+# The version string is "0.2.0-N" (a plain numeric pre-release identifier),
+# NOT "0.2.0-experimental.N" — Windows' MSI/WiX bundler requires the
+# pre-release identifier to be numeric-only, and "experimental.N" isn't.
+# The "experimental" labeling still shows up in the release title/body and
+# the prerelease/draft flags, just not baked into the semver string itself.
 on:
   push:
     branches: [main]
@@ -26,14 +32,16 @@ jobs:
       - name: Compute next experimental version
         id: bump
         run: |
-          BASE_VERSION=$(node -p "require('./package.json').version.replace(/-experimental\.[0-9]+$/, '')")
-          LATEST_TAG=$(git tag -l "v${BASE_VERSION}-experimental.*" | sort -V | tail -n1)
+          BASE_VERSION=$(node -p "require('./package.json').version.replace(/-.*$/, '')")
+          # Matches both the old "-experimental.N" tags and the new "-N" ones,
+          # so numbering keeps continuing from whatever was tagged last.
+          LATEST_TAG=$(git tag -l "v${BASE_VERSION}-*" | sort -V | tail -n1)
           if [ -z "$LATEST_TAG" ]; then
             NEXT=1
           else
             NEXT=$(( $(echo "$LATEST_TAG" | grep -oE '[0-9]+$') + 1 ))
           fi
-          NEW_VERSION="${BASE_VERSION}-experimental.${NEXT}"
+          NEW_VERSION="${BASE_VERSION}-${NEXT}"
           echo "Next experimental version: $NEW_VERSION"
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
 
@@ -84,7 +92,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: v${{ needs.version.outputs.version }}
-          releaseName: "Relay ${{ needs.version.outputs.version }}"
+          releaseName: "Relay ${{ needs.version.outputs.version }} (experimental)"
           releaseBody: "Experimental build from main. See the assets below to download and install this version."
           releaseDraft: true
           prerelease: true
