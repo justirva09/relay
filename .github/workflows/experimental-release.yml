@@ -31,30 +31,25 @@ jobs:
       version: ${{ steps.bump.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
 
-      - name: Compute next experimental version
+      - name: Compute next experimental version and tag
         id: bump
         run: |
           BASE_VERSION=$(node -p "require('./package.json').version.replace(/-.*$/, '')")
-          # Matches both the old "-experimental.N" tags and the new "-N" ones,
-          # so numbering keeps continuing from whatever was tagged last.
-          LATEST_TAG=$(git tag -l "v${BASE_VERSION}-*" | sort -V | tail -n1)
-          if [ -z "$LATEST_TAG" ]; then
-            NEXT=1
-          else
-            NEXT=$(( $(echo "$LATEST_TAG" | grep -oE '[0-9]+$') + 1 ))
-          fi
+          # Query the remote directly instead of relying on local tag fetch
+          # (fetch-tags/fetch-depth combos were flaky and missed tags that
+          # a prior run had already pushed, causing duplicate-tag collisions).
+          LATEST_N=$(git ls-remote --tags origin "v${BASE_VERSION}-*" \
+            | sed -E 's#.*refs/tags/##; s/\^\{\}$//' \
+            | grep -oE '[0-9]+$' \
+            | sort -n | tail -n1)
+          NEXT=$(( ${LATEST_N:-0} + 1 ))
           NEW_VERSION="${BASE_VERSION}-${NEXT}"
           echo "Next experimental version: $NEW_VERSION"
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Tag this commit
-        run: |
-          git tag "v${{ steps.bump.outputs.version }}"
-          git push origin "v${{ steps.bump.outputs.version }}"
+          git tag "v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
 
   build:
     needs: version
