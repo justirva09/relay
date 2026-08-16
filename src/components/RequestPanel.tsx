@@ -1,33 +1,25 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Method, RequestData, buildUrlFromParams, parseQueryToRows } from "../types";
-import KeyValueEditor from "./KeyValueEditor";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Method, RequestData, buildUrlFromParams, parseQueryToRows, parsePathParamsFromUrl } from "../types";
+import KeyValueEditor, { ValueInput } from "./KeyValueEditor";
 import CodeEditor from "./CodeEditor";
 import CodeSnippetModal from "./CodeSnippetModal";
+import { PM_PRE_COMPLETIONS, PM_TEST_COMPLETIONS } from "../lib/pmCompletions";
+import { useWorkspace } from "../store";
+import { useVariableMenu } from "../lib/useVariableMenu";
+import VariableMenuList from "./VariableMenuList";
+import { highlightUrlTokens } from "../lib/urlHighlight";
 
-function highlightVars(text: string) {
-  const parts: React.ReactNode[] = [];
-  const re = /(\{\{[^}]*\}\})/g;
-  let last = 0;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > last) parts.push(text.slice(last, match.index));
-    parts.push(<span key={match.index} className="text-orange-400">{match[0]}</span>);
-    last = re.lastIndex;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  if (parts.length === 0) parts.push(" ");
-  return parts;
-}
-
-function UrlInput({ value, onChange, onKeyDown, placeholder }: {
+function UrlInput({ value, onChange, onKeyDown, placeholder, variables }: {
   value: string;
   onChange: (val: string) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
   placeholder: string;
+  variables?: string[];
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
+  const { menu, recompute, close, move, hover, apply } = useVariableMenu(variables);
 
   const syncScroll = () => {
     requestAnimationFrame(() => {
@@ -37,26 +29,59 @@ function UrlInput({ value, onChange, onKeyDown, placeholder }: {
     });
   };
 
+  const select = (item: string) => {
+    const result = apply(value, item);
+    if (!result) return;
+    onChange(result.next);
+    close();
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      if (inputRef.current) inputRef.current.selectionStart = inputRef.current.selectionEnd = result.cursor;
+    });
+  };
+
   return (
-    <div
-      className={`flex-1 min-w-0 relative overflow-hidden bg-th-surface border rounded-md ${focused ? "border-th-border-focus" : "border-th-border-input"}`}
-      onClick={() => inputRef.current?.focus()}
-    >
-      <div ref={overlayRef} className="px-3 py-2 text-[13px] font-mono whitespace-pre overflow-hidden pointer-events-none" aria-hidden>
-        {value ? highlightVars(value) : <span className="text-th-text-4">{placeholder}</span>}
+    <div className="flex-1 min-w-0 relative">
+      <div
+        className={`relative overflow-hidden bg-th-surface border rounded-md ${focused ? "border-th-border-focus" : "border-th-border-input"}`}
+        onClick={() => inputRef.current?.focus()}
+      >
+        <div ref={overlayRef} className="px-3 py-2 text-[13px] font-mono whitespace-pre overflow-hidden pointer-events-none" aria-hidden>
+          {value ? highlightUrlTokens(value, true) : <span className="text-th-text-4">{placeholder}</span>}
+        </div>
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => { onChange(e.target.value); syncScroll(); recompute(e.target.value, e.target.selectionStart ?? e.target.value.length); }}
+          onKeyDown={(e) => {
+            if (menu) {
+              if (e.key === "ArrowDown") { e.preventDefault(); move(1); return; }
+              if (e.key === "ArrowUp") { e.preventDefault(); move(-1); return; }
+              if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); select(menu.items[menu.activeIndex]); return; }
+              if (e.key === "Escape") { e.preventDefault(); close(); return; }
+            }
+            onKeyDown(e);
+          }}
+          onKeyUp={(e) => {
+            syncScroll();
+            if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) recompute(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length);
+          }}
+          onScroll={syncScroll}
+          onFocus={() => { setFocused(true); syncScroll(); }}
+          onBlur={() => { setFocused(false); close(); }}
+          className="absolute inset-0 w-full h-full px-3 py-2 text-[13px] font-mono bg-transparent text-transparent caret-slate-200 focus:outline-none"
+          spellCheck={false}
+        />
       </div>
-      <input
-        ref={inputRef}
-        value={value}
-        onChange={(e) => { onChange(e.target.value); syncScroll(); }}
-        onKeyDown={onKeyDown}
-        onKeyUp={syncScroll}
-        onScroll={syncScroll}
-        onFocus={() => { setFocused(true); syncScroll(); }}
-        onBlur={() => setFocused(false)}
-        className="absolute inset-0 w-full h-full px-3 py-2 text-[13px] font-mono bg-transparent text-transparent caret-slate-200 focus:outline-none"
-        spellCheck={false}
-      />
+      {menu && (
+        <VariableMenuList
+          items={menu.items}
+          activeIndex={menu.activeIndex}
+          onHover={hover}
+          onSelect={select}
+          style={{ top: "100%", left: `${menu.col}ch`, marginTop: "4px" }}
+        />
+      )}
     </div>
   );
 }
@@ -187,11 +212,27 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
   const [showSnippet, setShowSnippet] = useState(false);
   const methodColor = METHOD_COLOR[draft.method] || METHOD_COLOR.GET;
 
+  const { workspace } = useWorkspace();
+  const variableNames = useMemo(() => {
+    const names = new Map<string, true>();
+    for (const v of workspace.variables) if (v.key.trim()) names.set(v.key, true);
+    const activeEnv = workspace.environments.find((e) => e.id === workspace.activeEnvironmentId);
+    if (activeEnv) for (const v of activeEnv.variables) if (v.key.trim()) names.set(v.key, true);
+    return Array.from(names.keys());
+  }, [workspace.variables, workspace.environments, workspace.activeEnvironmentId]);
+
   const handleUrlChange = (val: string) => {
-    onChange({ url: val, params: parseQueryToRows(val, draft.params) });
+    onChange({
+      url: val,
+      params: parseQueryToRows(val, draft.params),
+      pathParams: parsePathParamsFromUrl(val, draft.pathParams),
+    });
   };
   const handleParamsChange = (rows: RequestData["params"]) => {
     onChange({ params: rows, url: buildUrlFromParams(draft.url, rows) });
+  };
+  const handlePathParamChange = (id: string, value: string) => {
+    onChange({ pathParams: draft.pathParams.map((r) => (r.id === id ? { ...r, value } : r)) });
   };
 
   const enabledParams = draft.params.filter((p) => p.enabled && p.key.trim()).length;
@@ -206,6 +247,7 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
           onChange={handleUrlChange}
           onKeyDown={(e) => e.key === "Enter" && onSend()}
           placeholder="https://api.example.com/endpoint?key=value"
+          variables={variableNames}
         />
         <button
           title="Code snippet"
@@ -260,11 +302,41 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
       </div>
 
       <div className="px-4 py-3">
-        {reqTab === "params" && <KeyValueEditor rows={draft.params} onChangeRows={handleParamsChange} placeholderKey="param" placeholderVal="value" />}
+        {reqTab === "params" && (
+          <div className="flex flex-col gap-4">
+            <div>
+              <p className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mb-1.5">Query Params</p>
+              <KeyValueEditor rows={draft.params} onChangeRows={handleParamsChange} placeholderKey="param" placeholderVal="value" variables={variableNames} />
+            </div>
+            {draft.pathParams.length > 0 && (
+              <div>
+                <p className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mb-1.5">Path Variables</p>
+                <div className="flex flex-col gap-1.5">
+                  {draft.pathParams.map((p) => (
+                    <div key={p.id} className="flex items-center gap-2">
+                      <span
+                        className="flex-1 min-w-0 truncate px-2.5 py-1.5 text-[13px] font-mono text-sky-400"
+                        title={p.key}
+                      >
+                        :{p.key}
+                      </span>
+                      <ValueInput
+                        value={p.value}
+                        onChange={(v) => handlePathParamChange(p.id, v)}
+                        placeholder="value"
+                        variables={variableNames}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {reqTab === "headers" && (
           <>
             <AutoHeadersList draft={draft} />
-            <KeyValueEditor rows={draft.headers} onChangeRows={(rows) => onChange({ headers: rows })} placeholderKey="header" placeholderVal="value" />
+            <KeyValueEditor rows={draft.headers} onChangeRows={(rows) => onChange({ headers: rows })} placeholderKey="header" placeholderVal="value" variables={variableNames} />
           </>
         )}
         {reqTab === "body" && (
@@ -303,6 +375,7 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
                   value={draft.bodyText}
                   onChange={(v) => onChange({ bodyText: v })}
                   placeholder={draft.bodyMode === "json" ? '{\n  "key": "value",\n  "token": "{{token}}"\n}' : "raw text body"}
+                  variables={variableNames}
                   className="h-40 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
                 />
               </div>
@@ -337,6 +410,8 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
                     value={draft.preScript}
                     onChange={(v) => onChange({ preScript: v })}
                     placeholder={PRE_PLACEHOLDER}
+                    completions={PM_PRE_COMPLETIONS}
+                    variables={variableNames}
                     className="h-48 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
                   />
                   <span className="text-[11px] text-th-text-4 font-mono">runs before send · pm.environment, pm.variables, pm.request, crypto (CryptoJS), require("crypto-js")</span>
@@ -347,6 +422,8 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
                     value={draft.testScript}
                     onChange={(v) => onChange({ testScript: v })}
                     placeholder={TEST_PLACEHOLDER}
+                    completions={PM_TEST_COMPLETIONS}
+                    variables={variableNames}
                     className="h-48 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
                   />
                   <span className="text-[11px] text-th-text-4 font-mono">runs after response · pm.test, pm.expect, pm.response</span>

@@ -5,6 +5,7 @@ mod commands;
 mod git;
 mod grpc;
 mod models;
+mod response_cache;
 mod storage;
 
 fn main() {
@@ -18,11 +19,14 @@ fn main() {
             storage::save_workspace_dir,
             storage::get_last_workspace_dir,
             storage::set_last_workspace_dir,
+            storage::dir_has_other_files,
             storage::read_file_at_path,
             storage::write_file_at_path,
             storage::list_proto_files_in_dir,
             git::git_status,
             git::git_commit,
+            response_cache::load_response_cache,
+            response_cache::save_response_cache,
             grpc::grpc_list_services,
             grpc::grpc_list_services_from_proto,
             grpc::list_proto_service_files,

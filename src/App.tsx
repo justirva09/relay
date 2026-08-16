@@ -73,15 +73,19 @@ const SPLIT_DEFAULT_H = 340;
 function WorkspaceSetupModal() {
   const { pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup } = useWorkspace();
   const [name, setName] = useState("");
+  const [hidden, setHidden] = useState(false);
 
   useEffect(() => {
     setName(pendingWorkspaceSetup?.suggestedName || "");
+    setHidden(!!pendingWorkspaceSetup?.folderHasOtherFiles);
   }, [pendingWorkspaceSetup]);
 
   if (!pendingWorkspaceSetup) return null;
 
+  const forcedHidden = pendingWorkspaceSetup.folderHasOtherFiles;
+
   const handleConfirm = () => {
-    confirmWorkspaceSetup(name);
+    confirmWorkspaceSetup(name, hidden);
   };
 
   return (
@@ -101,6 +105,25 @@ function WorkspaceSetupModal() {
           onKeyDown={(e) => { if (e.key === "Enter") handleConfirm(); }}
           className="w-full bg-th-bg border border-th-border-input rounded-md px-3 py-2 text-[13px] font-mono text-th-text-1 focus:outline-none focus:border-th-border-focus mb-4"
         />
+
+        <label className={`flex items-start gap-2.5 mb-4 ${forcedHidden ? "opacity-70" : "cursor-pointer"}`}>
+          <input
+            type="checkbox"
+            checked={hidden}
+            disabled={forcedHidden}
+            onChange={(e) => setHidden(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 accent-[var(--c-accent)] shrink-0"
+          />
+          <span className="text-[12px] text-th-text-3">
+            Keep Relay's files in a hidden <span className="font-mono text-th-text-2">.relay/</span> folder
+            {forcedHidden ? (
+              <> — required here since this folder already has other files, so nothing outside <span className="font-mono text-th-text-2">.relay/</span> is ever touched.</>
+            ) : (
+              <> instead of directly in this folder. Turn this on if you're pointing Relay at an existing project's folder.</>
+            )}
+          </span>
+        </label>
+
         <div className="flex items-center justify-end gap-2">
           <button
             onClick={cancelWorkspaceSetup}
@@ -121,19 +144,35 @@ function WorkspaceSetupModal() {
 }
 
 function WorkspaceFolderBanner() {
-  const { workspaceDir, openWorkspaceFolder } = useWorkspace();
+  const { workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError } = useWorkspace();
   if (workspaceDir) return null;
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-2 bg-th-accent-bg border-b border-th-border text-[12.5px]">
-      <span className="text-th-accent-text">
-        No workspace folder chosen — changes aren't saved to disk yet. Pick a folder to store this collection as git-friendly `.relay` files.
-      </span>
-      <button
-        onClick={() => openWorkspaceFolder()}
-        className="shrink-0 px-3 py-1 rounded-md bg-th-accent text-white hover:bg-th-accent-hover"
-      >
-        Choose Folder
-      </button>
+    <div className="flex flex-col gap-1.5 px-4 py-2 bg-th-accent-bg border-b border-th-border text-[12.5px]">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-th-accent-text">
+          No workspace folder chosen — changes aren't saved to disk yet.
+        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => openWorkspaceFolder()}
+            className="px-3 py-1 rounded-md border border-th-accent-border text-th-accent-text hover:bg-th-accent-bg"
+          >
+            Open Folder
+          </button>
+          <button
+            onClick={() => createWorkspace()}
+            className="px-3 py-1 rounded-md bg-th-accent text-white hover:bg-th-accent-hover"
+          >
+            New Workspace
+          </button>
+        </div>
+      </div>
+      {workspaceOpenError && (
+        <div className="flex items-center justify-between gap-3 text-rose-500">
+          <span>{workspaceOpenError}</span>
+          <button onClick={dismissWorkspaceOpenError} className="shrink-0 hover:text-rose-600">×</button>
+        </div>
+      )}
     </div>
   );
 }

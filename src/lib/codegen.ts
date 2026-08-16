@@ -1,5 +1,5 @@
 import { RequestData } from "../types";
-import { substituteVars } from "./pm";
+import { substituteVars, substitutePathParams } from "./pm";
 
 export interface SnippetRequest {
   method: string;
@@ -16,7 +16,7 @@ export function toSnippetRequest(draft: RequestData, vars: Record<string, string
   if (draft.bodyMode === "json" && body !== undefined && !headers.some(([k]) => k.toLowerCase() === "content-type")) {
     headers.push(["Content-Type", "application/json"]);
   }
-  const url = substituteVars(draft.url, vars) || "https://api.example.com";
+  const url = substituteVars(substitutePathParams(draft.url, draft.pathParams), vars) || "https://api.example.com";
   return { method: draft.method, url, headers, body };
 }
 

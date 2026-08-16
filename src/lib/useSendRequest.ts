@@ -1,5 +1,5 @@
 import CryptoJS from "crypto-js";
-import { buildPm, substituteVars, TestResultDraft } from "./pm";
+import { buildPm, substituteVars, substitutePathParams, TestResultDraft } from "./pm";
 import { sendHttpRequest } from "./tauri";
 import { KVRow, RequestData, ResponseState } from "../types";
 
@@ -40,7 +40,7 @@ export async function runRequest(
     }
   }
 
-  const subUrl = substituteVars(scriptRequest.url, varsObj) ?? "";
+  const subUrl = substituteVars(substitutePathParams(scriptRequest.url, req.pathParams), varsObj) ?? "";
   const subHeaders: [string, string][] = scriptRequest.headers.map((h) => [h.key, substituteVars(h.value, varsObj) ?? ""]);
   const subBody = scriptRequest.body !== undefined ? substituteVars(scriptRequest.body, varsObj) : undefined;
   if (req.bodyMode === "json" && !subHeaders.some(([k]) => k.toLowerCase() === "content-type")) {

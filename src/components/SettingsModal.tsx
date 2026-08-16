@@ -4,7 +4,7 @@ import { useTheme } from "../lib/theme";
 import { useLayout } from "../lib/layout";
 
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
-  const { importCollection, exportCollection, workspaceDir, openWorkspaceFolder } = useWorkspace();
+  const { importCollection, exportCollection, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, responseCacheEnabled, setResponseCacheEnabled } = useWorkspace();
   const { theme, toggleTheme } = useTheme();
   const { responseLayout, setResponseLayout } = useLayout();
   const [status, setStatus] = useState<string | null>(null);
@@ -87,11 +87,41 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             </p>
             <div className="flex items-center justify-between bg-th-bg border border-th-border rounded-md px-3 py-2.5 gap-3">
               <span className="text-[12px] font-mono text-th-text-2 truncate">{workspaceDir || "Not set — changes are not saved to disk"}</span>
+              <div className="shrink-0 flex items-center gap-2">
+                <button
+                  onClick={() => openWorkspaceFolder()}
+                  className="px-3 py-1.5 rounded-md text-[12.5px] font-mono border border-th-border-input text-th-text-2 hover:text-th-text-1 hover:border-th-text-4"
+                >
+                  Open Folder
+                </button>
+                <button
+                  onClick={() => createWorkspace()}
+                  className="px-3 py-1.5 rounded-md text-[12.5px] font-mono border border-th-border-input text-th-text-2 hover:text-th-text-1 hover:border-th-text-4"
+                >
+                  New Workspace
+                </button>
+              </div>
+            </div>
+            {workspaceOpenError && (
+              <div className="flex items-center justify-between gap-3 mt-2 text-[12px] text-rose-500">
+                <span>{workspaceOpenError}</span>
+                <button onClick={dismissWorkspaceOpenError} className="shrink-0 hover:text-rose-600">×</button>
+              </div>
+            )}
+            <div className="flex items-center justify-between bg-th-bg border border-th-border rounded-md px-3 py-2.5 mt-2">
+              <div>
+                <span className="text-[13px] text-th-text-1 block">Save response history</span>
+                <span className="text-[11px] text-th-text-3">Cached locally per workspace — never written to the .relay files.</span>
+              </div>
               <button
-                onClick={() => openWorkspaceFolder()}
-                className="shrink-0 px-3 py-1.5 rounded-md text-[12.5px] font-mono border border-th-border-input text-th-text-2 hover:text-th-text-1 hover:border-th-text-4"
+                onClick={() => setResponseCacheEnabled(!responseCacheEnabled)}
+                className={`shrink-0 px-3 py-1.5 rounded-md text-[12.5px] font-mono border transition-colors ${
+                  responseCacheEnabled
+                    ? "border-th-accent-border text-th-accent-text bg-th-accent-bg"
+                    : "border-th-border-input text-th-text-2 hover:text-th-text-1 hover:border-th-text-4"
+                }`}
               >
-                {workspaceDir ? "Switch Folder" : "Choose Folder"}
+                {responseCacheEnabled ? "On" : "Off"}
               </button>
             </div>
           </section>

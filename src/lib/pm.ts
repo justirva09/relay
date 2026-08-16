@@ -24,6 +24,18 @@ export function substituteVars(text: string | undefined, vars: Record<string, st
   return text.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key) => (vars[key] !== undefined ? String(vars[key]) : `{{${key}}}`));
 }
 
+// Replaces Postman-style :paramName path segments with their configured
+// values (URL-encoded, since a raw value could contain "/" or spaces and
+// break the URL). Unfilled or unknown names are left as-is.
+export function substitutePathParams(url: string, pathParams: { key: string; value: string }[]): string {
+  let result = url;
+  for (const p of pathParams) {
+    if (!p.key.trim() || !p.value.trim()) continue;
+    result = result.replace(new RegExp(`:${p.key}\\b`, "g"), encodeURIComponent(p.value));
+  }
+  return result;
+}
+
 function makeExpect(actual: any) {
   return {
     to: {

@@ -48,14 +48,29 @@ export function setLastWorkspaceDir(dir: string): Promise<void> {
   return invoke("set_last_workspace_dir", { dir });
 }
 
-export async function loadWorkspaceDir(dir: string): Promise<string | null> {
-  const raw = await invoke<string>("load_workspace_dir", { dir });
-  if (!raw || raw === "null") return null;
-  return raw;
+export interface LoadedWorkspace {
+  workspace: string | null; // JSON string, caller parses into Workspace
+  hidden: boolean;
 }
 
-export function saveWorkspaceDir(dir: string, data: string): Promise<void> {
-  return invoke("save_workspace_dir", { dir, data });
+export async function loadWorkspaceDir(dir: string): Promise<LoadedWorkspace> {
+  const raw = await invoke<string>("load_workspace_dir", { dir });
+  const envelope = JSON.parse(raw) as { workspace: unknown; hidden: boolean };
+  return {
+    workspace: envelope.workspace === null ? null : JSON.stringify(envelope.workspace),
+    hidden: envelope.hidden,
+  };
+}
+
+export function saveWorkspaceDir(dir: string, data: string, hidden: boolean): Promise<void> {
+  return invoke("save_workspace_dir", { dir, data, hidden });
+}
+
+// Whether the picked folder already has files besides dotfiles — used to
+// decide whether to offer a flat (visible-at-root) layout at all, or force
+// the isolated .relay/ subfolder so an existing project's files aren't at risk.
+export function dirHasOtherFiles(dir: string): Promise<boolean> {
+  return invoke("dir_has_other_files", { dir });
 }
 
 export async function pickJsonFile(): Promise<string | null> {
@@ -107,4 +122,14 @@ export function gitStatus(dir: string): Promise<GitStatusInfo | null> {
 
 export function gitCommit(dir: string, message: string): Promise<void> {
   return invoke("git_commit", { dir, message });
+}
+
+// Local-only cache of each request's last response, keyed by workspace
+// folder — never part of the committed .relay files (see response_cache.rs).
+export function loadResponseCache(workspaceDir: string): Promise<string> {
+  return invoke("load_response_cache", { workspaceDir });
+}
+
+export function saveResponseCache(workspaceDir: string, data: string): Promise<void> {
+  return invoke("save_response_cache", { workspaceDir, data });
 }

@@ -254,9 +254,53 @@ fn clean_workspace_dir(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether an existing workspace at `dir` is stored flat (files directly in
+/// `dir`) or under a hidden `.relay/` subfolder — detected from whichever
+/// `workspace.relay` actually exists on disk, so a folder someone else set
+/// up (e.g. cloned from git) is read back the same way regardless of which
+/// mode this particular Relay install would otherwise default to.
+fn detect_layout(dir: &str) -> Option<bool> {
+    if Path::new(dir).join(".relay").join("workspace.relay").exists() {
+        Some(true)
+    } else if Path::new(dir).join("workspace.relay").exists() {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// True if `dir` has any entry besides dotfiles/`.relay` — i.e. whether it's
+/// an existing project folder rather than one dedicated to this workspace.
+/// Used so the frontend can force the safer hidden layout instead of letting
+/// flat mode wipe someone's other files.
 #[tauri::command]
-pub fn save_workspace_dir(dir: String, data: String) -> Result<(), String> {
-    let root = Path::new(&dir);
+pub fn dir_has_other_files(dir: String) -> Result<bool, String> {
+    let path = Path::new(&dir);
+    if !path.exists() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(path).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_name().to_string_lossy().starts_with('.') {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn relay_root(dir: &str, hidden: bool) -> std::path::PathBuf {
+    let hidden = detect_layout(dir).unwrap_or(hidden);
+    if hidden {
+        Path::new(dir).join(".relay")
+    } else {
+        Path::new(dir).to_path_buf()
+    }
+}
+
+#[tauri::command]
+pub fn save_workspace_dir(dir: String, data: String, hidden: bool) -> Result<(), String> {
+    let root_buf = relay_root(&dir, hidden);
+    let root = root_buf.as_path();
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let ws: Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
 
@@ -332,11 +376,12 @@ pub fn save_workspace_dir(dir: String, data: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn load_workspace_dir(dir: String) -> Result<String, String> {
-    let root = Path::new(&dir);
+    let Some(hidden) = detect_layout(&dir) else {
+        return serde_json::to_string(&json!({ "workspace": null, "hidden": false })).map_err(|e| e.to_string());
+    };
+    let root_buf = relay_root(&dir, hidden);
+    let root = root_buf.as_path();
     let meta_path = root.join("workspace.relay");
-    if !meta_path.exists() {
-        return Ok("null".to_string());
-    }
     let meta_raw = fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
     let meta: Value = serde_json::from_str(&meta_raw).map_err(|e| e.to_string())?;
 
@@ -381,7 +426,7 @@ pub fn load_workspace_dir(dir: String) -> Result<String, String> {
         "protoLibrary": meta.get("protoLibrary").cloned().unwrap_or(json!([])),
     });
 
-    serde_json::to_string(&workspace).map_err(|e| e.to_string())
+    serde_json::to_string(&json!({ "workspace": workspace, "hidden": hidden })).map_err(|e| e.to_string())
 }
 
 fn config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -453,16 +498,19 @@ mod tests {
             "protoLibrary": []
         });
 
-        save_workspace_dir(dir.to_string_lossy().to_string(), ws.to_string()).expect("save failed");
+        save_workspace_dir(dir.to_string_lossy().to_string(), ws.to_string(), true).expect("save failed");
 
-        assert!(dir.join("workspace.relay").exists());
-        assert!(dir.join("github-api").join("_folder.relay").exists());
-        assert!(dir.join("github-api").join("get-user.relay").exists());
-        assert!(dir.join("github-api").join("sayhello.relay").exists());
-        assert!(dir.join("environments").join("production.relay").exists());
+        let relay = dir.join(".relay");
+        assert!(relay.join("workspace.relay").exists());
+        assert!(relay.join("github-api").join("_folder.relay").exists());
+        assert!(relay.join("github-api").join("get-user.relay").exists());
+        assert!(relay.join("github-api").join("sayhello.relay").exists());
+        assert!(relay.join("environments").join("production.relay").exists());
 
         let raw = load_workspace_dir(dir.to_string_lossy().to_string()).expect("load failed");
-        let loaded: Value = serde_json::from_str(&raw).unwrap();
+        let envelope: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(envelope["hidden"], true);
+        let loaded = &envelope["workspace"];
         assert_eq!(loaded["name"], "Acme API");
         assert_eq!(loaded["tree"][0]["name"], "GitHub API");
         assert_eq!(loaded["tree"][0]["children"][0]["name"], "Get user");
@@ -473,13 +521,15 @@ mod tests {
 
         // Rename the request and re-save: old file should be gone, new one present,
         // and untouched sibling files must be byte-identical (stable git diffs).
-        let before_grpc = fs::read_to_string(dir.join("github-api").join("sayhello.relay")).unwrap();
+        let before_grpc = fs::read_to_string(relay.join("github-api").join("sayhello.relay")).unwrap();
         let mut ws2 = loaded.clone();
         ws2["tree"][0]["children"][0]["name"] = json!("Fetch user");
-        save_workspace_dir(dir.to_string_lossy().to_string(), ws2.to_string()).expect("save2 failed");
-        assert!(!dir.join("github-api").join("get-user.relay").exists());
-        assert!(dir.join("github-api").join("fetch-user.relay").exists());
-        let after_grpc = fs::read_to_string(dir.join("github-api").join("sayhello.relay")).unwrap();
+        // Note: hidden=false here is ignored — layout was already established
+        // as hidden by the first save, and that's auto-detected from disk.
+        save_workspace_dir(dir.to_string_lossy().to_string(), ws2.to_string(), false).expect("save2 failed");
+        assert!(!relay.join("github-api").join("get-user.relay").exists());
+        assert!(relay.join("github-api").join("fetch-user.relay").exists());
+        let after_grpc = fs::read_to_string(relay.join("github-api").join("sayhello.relay")).unwrap();
         assert_eq!(before_grpc, after_grpc, "untouched node must be byte-identical across saves");
 
         fs::remove_dir_all(&dir).ok();
@@ -498,13 +548,72 @@ mod tests {
             "activeEnvironmentId": null,
             "protoLibrary": []
         });
-        save_workspace_dir(dir.to_string_lossy().to_string(), ws.to_string()).expect("save failed");
-        assert!(dir.join("reports").is_dir());
-        assert!(dir.join("reports.relay").is_file());
+        save_workspace_dir(dir.to_string_lossy().to_string(), ws.to_string(), true).expect("save failed");
+        assert!(dir.join(".relay").join("reports").is_dir());
+        assert!(dir.join(".relay").join("reports.relay").is_file());
 
         let raw = load_workspace_dir(dir.to_string_lossy().to_string()).expect("load failed");
-        let loaded: Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(loaded["tree"].as_array().unwrap().len(), 2);
+        let envelope: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(envelope["workspace"]["tree"].as_array().unwrap().len(), 2);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hidden_mode_never_touches_other_files_in_the_chosen_folder() {
+        let dir = tmp_dir("existing-project");
+        // Simulate the exact scenario being fixed: user points Relay at an
+        // existing project folder that already has its own files.
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("package.json"), "{\"name\":\"my-app\"}").unwrap();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src").join("index.js"), "console.log('hi')").unwrap();
+
+        let ws = json!({
+            "tree": [{ "id": "r1", "kind": "request", "name": "Ping", "request": { "method": "GET", "url": "", "params": [], "headers": [], "bodyMode": "none", "bodyText": "", "preScript": "", "testScript": "" } }],
+            "variables": [], "environments": [], "activeEnvironmentId": null, "protoLibrary": []
+        });
+        save_workspace_dir(dir.to_string_lossy().to_string(), ws.to_string(), true).expect("save failed");
+
+        assert_eq!(fs::read_to_string(dir.join("package.json")).unwrap(), "{\"name\":\"my-app\"}");
+        assert_eq!(fs::read_to_string(dir.join("src").join("index.js")).unwrap(), "console.log('hi')");
+        assert!(dir.join(".relay").join("ping.relay").exists());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn flat_mode_writes_directly_to_the_chosen_folder() {
+        let dir = tmp_dir("flat");
+        let ws = json!({
+            "tree": [{ "id": "r1", "kind": "request", "name": "Ping", "request": { "method": "GET", "url": "", "params": [], "headers": [], "bodyMode": "none", "bodyText": "", "preScript": "", "testScript": "" } }],
+            "variables": [], "environments": [], "activeEnvironmentId": null, "protoLibrary": []
+        });
+        save_workspace_dir(dir.to_string_lossy().to_string(), ws.to_string(), false).expect("save failed");
+
+        assert!(dir.join("workspace.relay").exists());
+        assert!(dir.join("ping.relay").exists());
+        assert!(!dir.join(".relay").exists(), "flat mode shouldn't create a .relay subfolder at all");
+
+        let raw = load_workspace_dir(dir.to_string_lossy().to_string()).expect("load failed");
+        let envelope: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(envelope["hidden"], false);
+        assert_eq!(envelope["workspace"]["tree"][0]["name"], "Ping");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn dir_has_other_files_ignores_dotfiles() {
+        let dir = tmp_dir("emptiness-check");
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(dir_has_other_files(dir.to_string_lossy().to_string()).unwrap(), false);
+
+        fs::write(dir.join(".gitignore"), "").unwrap();
+        assert_eq!(dir_has_other_files(dir.to_string_lossy().to_string()).unwrap(), false, "dotfiles don't count as other content");
+
+        fs::write(dir.join("README.md"), "").unwrap();
+        assert_eq!(dir_has_other_files(dir.to_string_lossy().to_string()).unwrap(), true);
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -529,9 +638,9 @@ mod tests {
             "protoLibrary": []
         });
 
-        save_workspace_dir(dir.to_string_lossy().to_string(), ws.to_string()).expect("save failed");
+        save_workspace_dir(dir.to_string_lossy().to_string(), ws.to_string(), true).expect("save failed");
 
-        let env_dir = dir.join("environments");
+        let env_dir = dir.join(".relay").join("environments");
         assert!(env_dir.join("production.relay").exists());
         assert!(env_dir.join("production.secret.relay").exists());
 
@@ -539,11 +648,15 @@ mod tests {
         assert!(!plain_raw.contains("sk-supersecret"), "secret value must not land in the committed file");
         assert!(plain_raw.contains("api.example.com"), "non-secret value stays in the committed file");
 
-        let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
+        // Lives inside .relay/, not the project root's own .gitignore — git
+        // honors nested .gitignore files, and this way saving a workspace
+        // never touches a file outside .relay/ at all.
+        let gitignore = fs::read_to_string(dir.join(".relay").join(".gitignore")).unwrap();
         assert!(gitignore.contains("*.secret.relay"));
 
         let raw = load_workspace_dir(dir.to_string_lossy().to_string()).expect("load failed");
-        let loaded: Value = serde_json::from_str(&raw).unwrap();
+        let envelope: Value = serde_json::from_str(&raw).unwrap();
+        let loaded = &envelope["workspace"];
         let vars = loaded["environments"][0]["variables"].as_array().unwrap();
         let api_key = vars.iter().find(|v| v["key"] == "api_key").unwrap();
         assert_eq!(api_key["value"], "sk-supersecret", "secret value must merge back on load");

@@ -1,4 +1,4 @@
-import { TreeNode, FolderNode, RequestNode, KVRow, Method, defaultRequest, newRow, uid, parseQueryToRows } from "../types";
+import { TreeNode, FolderNode, RequestNode, KVRow, Method, defaultRequest, newRow, uid, parseQueryToRows, parsePathParamsFromUrl } from "../types";
 
 const POSTMAN_SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
 
@@ -103,6 +103,7 @@ function parsePostmanItem(item: PostmanItem): TreeNode {
       method,
       url: rawUrl,
       params: parseQueryToRows(rawUrl),
+      pathParams: parsePathParamsFromUrl(rawUrl),
       headers,
       bodyMode,
       bodyText,

@@ -14,6 +14,7 @@ export interface RequestData {
   method: Method;
   url: string;
   params: KVRow[];
+  pathParams: KVRow[];
   headers: KVRow[];
   bodyMode: BodyMode;
   bodyText: string;
@@ -164,6 +165,30 @@ export function parseQueryToRows(fullUrl: string, existingRows?: KVRow[]): KVRow
   return rows;
 }
 
+// Postman-style :paramName path segments — a fresh row per unique name
+// found in the URL's path (before "?"), preserving an existing row's value
+// when the name is still present so retyping the URL doesn't clear values.
+export function parsePathParamsFromUrl(fullUrl: string, existingRows?: KVRow[]): KVRow[] {
+  const qIndex = fullUrl.indexOf("?");
+  const pathPart = qIndex === -1 ? fullUrl : fullUrl.slice(0, qIndex);
+  const names: string[] = [];
+  const re = /:([A-Za-z_]\w*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(pathPart)) !== null) {
+    if (!names.includes(match[1])) names.push(match[1]);
+  }
+  return names.map((name) => existingRows?.find((r) => r.key === name) ?? { id: uid(), key: name, value: "", enabled: true });
+}
+
+// Backfills fields added to RequestData after some workspaces were already
+// saved to disk (e.g. pathParams) so opening an older request doesn't crash.
+export function normalizeRequestData(req: any): RequestData {
+  return {
+    ...req,
+    pathParams: Array.isArray(req.pathParams) ? req.pathParams : parsePathParamsFromUrl(req.url ?? "", req.pathParams),
+  };
+}
+
 export function buildUrlFromParams(fullUrl: string, rows: KVRow[]): string {
   const qIndex = fullUrl.indexOf("?");
   const base = qIndex === -1 ? fullUrl : fullUrl.slice(0, qIndex);
@@ -179,6 +204,7 @@ export function defaultRequest(method: Method = "GET", url = ""): RequestData {
     method,
     url,
     params: parseQueryToRows(url),
+    pathParams: parsePathParamsFromUrl(url),
     headers: [newRow()],
     bodyMode: "none",
     bodyText: "",
@@ -214,35 +240,31 @@ export function demoWorkspace(name = "My Workspace"): Workspace {
       {
         id: uid(),
         kind: "folder",
-        name: "GitHub API",
+        name: "JSONPlaceholder API",
         children: [
           {
             id: uid(),
             kind: "request",
-            name: "Search repos",
-            request: defaultRequest("GET", "https://api.github.com/search/repositories?q=anthropic&per_page=5"),
+            name: "List posts",
+            request: defaultRequest("GET", "https://jsonplaceholder.typicode.com/posts?_limit=5"),
           },
           {
             id: uid(),
             kind: "request",
-            name: "Get user",
-            request: defaultRequest("GET", "https://api.github.com/users/anthropics"),
+            name: "Get post by ID",
+            request: {
+              ...defaultRequest("GET", "https://jsonplaceholder.typicode.com/posts/:id"),
+              pathParams: [{ id: uid(), key: "id", value: "1", enabled: true }],
+            },
           },
-        ],
-      },
-      {
-        id: uid(),
-        kind: "folder",
-        name: "Examples",
-        children: [
           {
             id: uid(),
             kind: "request",
-            name: "Create post (jsonplaceholder)",
+            name: "Create post",
             request: {
               ...defaultRequest("POST", "https://jsonplaceholder.typicode.com/posts"),
               bodyMode: "json",
-              bodyText: '{\n  "title": "hello",\n  "body": "from lite postman",\n  "userId": 1\n}',
+              bodyText: '{\n  "title": "hello",\n  "body": "from Relay",\n  "userId": 1\n}',
             },
           },
         ],

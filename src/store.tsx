@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Environment, FolderNode, GrpcLogEntry, GrpcRequestData, GrpcRequestNode, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, RequestNode, TabState, TreeNode, Workspace, defaultGrpcRequest, defaultRequest, demoWorkspace, newRow, uid } from "./types";
-import { loadWorkspaceFile, pickJsonFile, pickSavePath, readFileAtPath, writeFileAtPath, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir } from "./lib/tauri";
+import { Environment, FolderNode, GrpcLogEntry, GrpcRequestData, GrpcRequestNode, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, RequestNode, ResponseState, TabState, TreeNode, Workspace, defaultGrpcRequest, defaultRequest, demoWorkspace, newRow, normalizeRequestData, uid } from "./types";
+import { loadWorkspaceFile, pickJsonFile, pickSavePath, readFileAtPath, writeFileAtPath, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles, loadResponseCache, saveResponseCache } from "./lib/tauri";
 import { runRequest } from "./lib/useSendRequest";
 import { isPostmanCollection, isRelayWorkspace, postmanToTree, treeToPostman } from "./lib/postman";
 import { simulateGrpcCall } from "./lib/grpcMock";
@@ -10,10 +10,15 @@ interface Ctx {
   workspace: Workspace;
   workspaceDir: string | null;
   openWorkspaceFolder: () => Promise<void>;
-  pendingWorkspaceSetup: { dir: string; suggestedName: string } | null;
-  confirmWorkspaceSetup: (name: string) => Promise<void>;
+  createWorkspace: () => Promise<void>;
+  workspaceOpenError: string | null;
+  dismissWorkspaceOpenError: () => void;
+  pendingWorkspaceSetup: { dir: string; suggestedName: string; folderHasOtherFiles: boolean } | null;
+  confirmWorkspaceSetup: (name: string, hidden: boolean) => Promise<void>;
   cancelWorkspaceSetup: () => void;
   renameWorkspace: (name: string) => void;
+  responseCacheEnabled: boolean;
+  setResponseCacheEnabled: (on: boolean) => void;
   tabs: TabState[];
   activeTabId: string | null;
   addFolder: (parentId: string | null) => string;
@@ -112,23 +117,53 @@ function basenameFromPath(path: string): string {
   return parts[parts.length - 1] || "My Workspace";
 }
 
+const RESPONSE_CACHE_SETTING_KEY = "relay-save-responses";
+
+type CachedResponse =
+  | { kind: "http"; response: ResponseState }
+  | { kind: "grpc"; lastResponse: GrpcResponseSummary };
+
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [workspace, setWorkspace] = useState<Workspace>({ name: "My Workspace", tree: [], variables: [newRow()], environments: [], activeEnvironmentId: null, protoLibrary: [] });
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
-  const [pendingWorkspaceSetup, setPendingWorkspaceSetup] = useState<{ dir: string; suggestedName: string } | null>(null);
+  const [workspaceHidden, setWorkspaceHidden] = useState(false);
+  const [pendingWorkspaceSetup, setPendingWorkspaceSetup] = useState<{ dir: string; suggestedName: string; folderHasOtherFiles: boolean } | null>(null);
+  const [workspaceOpenError, setWorkspaceOpenError] = useState<string | null>(null);
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
+  const [responseCacheEnabled, setResponseCacheEnabledState] = useState(() => localStorage.getItem(RESPONSE_CACHE_SETTING_KEY) !== "false");
   const loaded = useRef(false);
   const grpcCancelRefs = useRef<Map<string, { current: boolean }>>(new Map());
+  const responseCacheRef = useRef<Record<string, CachedResponse>>({});
+
+  const setResponseCacheEnabled = useCallback((on: boolean) => {
+    localStorage.setItem(RESPONSE_CACHE_SETTING_KEY, String(on));
+    setResponseCacheEnabledState(on);
+  }, []);
+
+  const persistResponseCache = useCallback((dir: string) => {
+    saveResponseCache(dir, JSON.stringify(responseCacheRef.current)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceDir) {
+      responseCacheRef.current = {};
+      return;
+    }
+    loadResponseCache(workspaceDir)
+      .then((raw) => { responseCacheRef.current = JSON.parse(raw); })
+      .catch(() => { responseCacheRef.current = {}; });
+  }, [workspaceDir]);
 
   useEffect(() => {
     (async () => {
       try {
         const dir = await getLastWorkspaceDir();
         if (dir) {
-          const raw = await loadWorkspaceDir(dir);
+          const { workspace: raw, hidden } = await loadWorkspaceDir(dir);
           setWorkspace(raw ? normalizeWorkspace(JSON.parse(raw), basenameFromPath(dir)) : demoWorkspace(basenameFromPath(dir)));
+          setWorkspaceHidden(hidden);
           setWorkspaceDir(dir);
           return;
         }
@@ -147,28 +182,64 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!loaded.current || !workspaceDir) return;
-    saveWorkspaceDir(workspaceDir, JSON.stringify(workspace)).catch(() => {});
-  }, [workspace, workspaceDir]);
+    saveWorkspaceDir(workspaceDir, JSON.stringify(workspace), workspaceHidden).catch(() => {});
+  }, [workspace, workspaceDir, workspaceHidden]);
 
+  // Strictly for opening a workspace that already exists — kept separate
+  // from createWorkspace so the two actions read as distinct in the UI
+  // instead of one button silently doing either depending on what's picked.
   const openWorkspaceFolder = useCallback(async () => {
     const dir = await pickWorkspaceFolder();
     if (!dir) return;
-    const raw = await loadWorkspaceDir(dir);
-    if (raw) {
-      // Existing .relay workspace — its own name travels with it, no prompt needed.
-      setWorkspace(normalizeWorkspace(JSON.parse(raw), basenameFromPath(dir)));
-      await setLastWorkspaceDir(dir);
-      setWorkspaceDir(dir);
-    } else {
-      // Empty folder — ask for a name before committing anything to disk.
-      setPendingWorkspaceSetup({ dir, suggestedName: basenameFromPath(dir) });
+    setWorkspaceOpenError(null);
+    const { workspace: raw, hidden } = await loadWorkspaceDir(dir);
+    if (!raw) {
+      setWorkspaceOpenError(`No Relay workspace found in "${basenameFromPath(dir)}". Use "New Workspace" to create one there.`);
+      return;
     }
+    setWorkspace(normalizeWorkspace(JSON.parse(raw), basenameFromPath(dir)));
+    setWorkspaceHidden(hidden);
+    await setLastWorkspaceDir(dir);
+    setWorkspaceDir(dir);
   }, []);
 
-  const confirmWorkspaceSetup = useCallback(async (name: string) => {
+  const createWorkspace = useCallback(async () => {
+    const dir = await pickWorkspaceFolder();
+    if (!dir) return;
+    setWorkspaceOpenError(null);
+    const { workspace: raw } = await loadWorkspaceDir(dir);
+    if (raw) {
+      setWorkspaceOpenError(`"${basenameFromPath(dir)}" already has a Relay workspace. Use "Open Folder" to open it instead.`);
+      return;
+    }
+    // Empty folder (or one with no Relay workspace yet) — ask for a name
+    // (and layout, if relevant) before committing anything to disk.
+    const folderHasOtherFiles = await dirHasOtherFiles(dir);
+    setPendingWorkspaceSetup({ dir, suggestedName: basenameFromPath(dir), folderHasOtherFiles });
+  }, []);
+
+  const dismissWorkspaceOpenError = useCallback(() => setWorkspaceOpenError(null), []);
+
+  const confirmWorkspaceSetup = useCallback(async (name: string, hidden: boolean) => {
     if (!pendingWorkspaceSetup) return;
-    const { dir } = pendingWorkspaceSetup;
-    setWorkspace((ws) => ({ ...ws, name: name.trim() || pendingWorkspaceSetup.suggestedName }));
+    const { dir, suggestedName, folderHasOtherFiles } = pendingWorkspaceSetup;
+    // A folder that already has other files always gets the isolated
+    // .relay/ layout — never let a "visible at root" choice wipe someone's
+    // existing project.
+    const effectiveHidden = folderHasOtherFiles ? true : hidden;
+    // A genuinely new workspace starts blank — it must not inherit whatever
+    // was previously loaded (demo data, or another workspace's tree).
+    setWorkspace({
+      name: name.trim() || suggestedName,
+      tree: [],
+      variables: [newRow()],
+      environments: [],
+      activeEnvironmentId: null,
+      protoLibrary: [],
+    });
+    setTabs([]);
+    setActiveTabId(null);
+    setWorkspaceHidden(effectiveHidden);
     await setLastWorkspaceDir(dir);
     setWorkspaceDir(dir);
     setPendingWorkspaceSetup(null);
@@ -226,6 +297,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       if (!node || node.kind === "folder") return;
       setTabs((t) => {
         if (t.some((tab) => tab.nodeId === id)) return t;
+        const cached = responseCacheEnabled ? responseCacheRef.current[id] : undefined;
         if (node.kind === "grpc") {
           const tab: GrpcTabState = {
             nodeId: id,
@@ -234,23 +306,23 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             dirty: false,
             log: [],
             streaming: false,
-            lastResponse: null,
+            lastResponse: cached?.kind === "grpc" ? cached.lastResponse : null,
           };
           return [...t, tab];
         }
         const tab: HttpTabState = {
           nodeId: id,
           kind: "http",
-          draft: JSON.parse(JSON.stringify(node.request)),
+          draft: normalizeRequestData(JSON.parse(JSON.stringify(node.request))),
           dirty: false,
-          response: null,
+          response: cached?.kind === "http" ? cached.response : null,
           loading: false,
         };
         return [...t, tab];
       });
       setActiveTabId(id);
     },
-    [workspace.tree]
+    [workspace.tree, responseCacheEnabled]
   );
 
   const forceCloseTab = useCallback(
@@ -475,8 +547,21 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       }
       const result = await runRequest(tab.draft, merged, setVariables);
       setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "http" ? { ...x, loading: false, response: result } : x)));
+      if (responseCacheEnabled && workspaceDir) {
+        responseCacheRef.current[id] = { kind: "http", response: result };
+        persistResponseCache(workspaceDir);
+      }
     },
-    [tabs, workspace.variables, workspace.environments, workspace.activeEnvironmentId, setVariables]
+    [tabs, workspace.variables, workspace.environments, workspace.activeEnvironmentId, setVariables, responseCacheEnabled, workspaceDir, persistResponseCache]
+  );
+
+  const cacheGrpcResponse = useCallback(
+    (id: string, lastResponse: GrpcResponseSummary) => {
+      if (!responseCacheEnabled || !workspaceDir) return;
+      responseCacheRef.current[id] = { kind: "grpc", lastResponse };
+      persistResponseCache(workspaceDir);
+    },
+    [responseCacheEnabled, workspaceDir, persistResponseCache]
   );
 
   const sendGrpcTab = useCallback(
@@ -517,6 +602,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             error: null,
           };
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [sentEntry, receivedEntry], streaming: false, lastResponse } : x)));
+          cacheGrpcResponse(id, lastResponse);
         } catch (e: any) {
           if (cancelRef.current) return;
           const errText = String(e);
@@ -530,6 +616,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             error: errText,
           };
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [sentEntry, errEntry], streaming: false, lastResponse } : x)));
+          cacheGrpcResponse(id, lastResponse);
         }
         return;
       }
@@ -544,7 +631,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       );
       setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: false } : x)));
     },
-    [tabs, workspace.protoLibrary]
+    [tabs, workspace.protoLibrary, cacheGrpcResponse]
   );
 
   const value = useMemo<Ctx>(
@@ -552,10 +639,15 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       workspace,
       workspaceDir,
       openWorkspaceFolder,
+      createWorkspace,
+      workspaceOpenError,
+      dismissWorkspaceOpenError,
       pendingWorkspaceSetup,
       confirmWorkspaceSetup,
       cancelWorkspaceSetup,
       renameWorkspace,
+      responseCacheEnabled,
+      setResponseCacheEnabled,
       tabs,
       activeTabId,
       addFolder,
@@ -587,7 +679,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       moveNode,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, tabs, activeTabId, addFolder, addRequest, addGrpcRequest, renameNode, deleteNode, toggleCollapse, openTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, exportCollection, moveNode, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, tabs, activeTabId, addFolder, addRequest, addGrpcRequest, renameNode, deleteNode, toggleCollapse, openTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, exportCollection, moveNode, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
