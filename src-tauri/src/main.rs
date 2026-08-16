@@ -11,6 +11,7 @@ mod storage;
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             commands::http_request,
             storage::load_workspace,
@@ -24,6 +25,7 @@ fn main() {
             storage::write_file_at_path,
             storage::list_proto_files_in_dir,
             git::git_status,
+            git::git_init,
             git::git_commit,
             response_cache::load_response_cache,
             response_cache::save_response_cache,

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useWorkspace } from "../store";
-import { gitStatus, gitCommit, GitStatusInfo } from "../lib/tauri";
+import { gitStatus, gitCommit, gitInit, GitStatusInfo } from "../lib/tauri";
 
 const STATUS_COLOR: Record<string, string> = {
   M: "text-amber-400",
@@ -87,17 +87,23 @@ function CommitModal({ info, onClose, onCommitted }: { info: GitStatusInfo; onCl
 export default function GitPanel() {
   const { workspaceDir } = useWorkspace();
   const [info, setInfo] = useState<GitStatusInfo | null>(null);
+  const [notARepo, setNotARepo] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [initializing, setInitializing] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!workspaceDir) {
       setInfo(null);
+      setNotARepo(false);
       return;
     }
     try {
-      setInfo(await gitStatus(workspaceDir));
+      const result = await gitStatus(workspaceDir);
+      setInfo(result);
+      setNotARepo(result === null);
     } catch {
       setInfo(null);
+      setNotARepo(false);
     }
   }, [workspaceDir]);
 
@@ -110,6 +116,35 @@ export default function GitPanel() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [refresh]);
+
+  const handleInit = async () => {
+    if (!workspaceDir || initializing) return;
+    setInitializing(true);
+    try {
+      await gitInit(workspaceDir);
+      await refresh();
+    } finally {
+      setInitializing(false);
+    }
+  };
+
+  if (notARepo) {
+    return (
+      <div className="shrink-0 border-t border-th-border px-3 py-1.5 flex items-center justify-between text-[11.5px] font-mono text-th-text-2">
+        <span className="flex items-center gap-1.5 truncate">
+          <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-th-text-4" />
+          <span className="truncate text-th-text-3">Not a git repo</span>
+        </span>
+        <button
+          onClick={handleInit}
+          disabled={initializing}
+          className="shrink-0 text-th-accent-text hover:underline disabled:opacity-40"
+        >
+          {initializing ? "Initializing…" : "Initialize"}
+        </button>
+      </div>
+    );
+  }
 
   if (!info) return null;
 

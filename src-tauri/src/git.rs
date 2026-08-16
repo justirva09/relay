@@ -95,6 +95,13 @@ pub fn git_status(dir: String) -> Result<Option<GitStatusInfo>, String> {
 }
 
 #[tauri::command]
+pub fn git_init(dir: String) -> Result<(), String> {
+    let path = Path::new(&dir);
+    run_git(path, &["init"])?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn git_commit(dir: String, message: String) -> Result<(), String> {
     let path = Path::new(&dir);
     if message.trim().is_empty() {

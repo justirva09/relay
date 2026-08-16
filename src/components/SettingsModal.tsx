@@ -1,19 +1,15 @@
-import React, { useEffect, useState } from "react";
-import { getVersion } from "@tauri-apps/api/app";
+import React, { useState } from "react";
 import { useWorkspace } from "../store";
 import { useTheme } from "../lib/theme";
 import { useLayout } from "../lib/layout";
+import AboutModal from "./AboutModal";
 
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
   const { importCollection, exportCollection, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, responseCacheEnabled, setResponseCacheEnabled } = useWorkspace();
   const { theme, toggleTheme } = useTheme();
   const { responseLayout, setResponseLayout } = useLayout();
   const [status, setStatus] = useState<string | null>(null);
-  const [version, setVersion] = useState<string | null>(null);
-
-  useEffect(() => {
-    getVersion().then(setVersion).catch(() => setVersion(null));
-  }, []);
+  const [showAbout, setShowAbout] = useState(false);
 
   const handleImport = async () => {
     try {
@@ -161,27 +157,15 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             </div>
             {status && <p className="text-[12px] text-th-text-2 mt-2 font-mono">{status}</p>}
           </section>
-
-          <section>
-            <h3 className="text-[12px] font-mono text-th-text-3 uppercase tracking-wide mb-2">About</h3>
-            <div className="flex flex-col items-center text-center bg-th-bg border border-th-border rounded-md px-4 py-6 gap-1">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-400 to-orange-600 grid place-items-center shadow-lg mb-2">
-                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 12h10M14 12l-3-3M14 12l-3 3" />
-                  <path d="M20 6v12" />
-                </svg>
-              </div>
-              <span className="text-[15px] font-semibold text-th-text-1">Relay</span>
-              <span className="text-[12px] font-mono text-th-text-3">Version {version || "—"}</span>
-              <p className="text-[12.5px] text-th-text-2 mt-3 max-w-[320px]">
-                Relay helps you build, test, and version-control HTTP and gRPC requests — faster.
-              </p>
-              <span className="text-[11px] text-th-text-4 mt-4">Copyright © 2026 Relay. All rights reserved.</span>
-            </div>
-          </section>
         </div>
 
-        <div className="flex items-center justify-end px-5 py-4 border-t border-th-border">
+        <div className="flex items-center justify-between px-5 py-4 border-t border-th-border">
+          <button
+            onClick={() => setShowAbout(true)}
+            className="text-[12.5px] text-th-text-3 hover:text-th-text-1"
+          >
+            About Relay
+          </button>
           <button
             onClick={onClose}
             className="px-4 py-1.5 rounded-md text-[12.5px] bg-th-accent text-white hover:bg-th-accent-hover"
@@ -190,6 +174,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
     </div>
   );
 }

@@ -124,6 +124,10 @@ export function gitCommit(dir: string, message: string): Promise<void> {
   return invoke("git_commit", { dir, message });
 }
 
+export function gitInit(dir: string): Promise<void> {
+  return invoke("git_init", { dir });
+}
+
 // Local-only cache of each request's last response, keyed by workspace
 // folder — never part of the committed .relay files (see response_cache.rs).
 export function loadResponseCache(workspaceDir: string): Promise<string> {
