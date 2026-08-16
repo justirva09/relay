@@ -15,6 +15,12 @@ on:
   push:
     branches: [main]
 
+# Prevent two runs from computing/pushing the same next tag at once —
+# queue pushes to main instead of racing each other on tag numbering.
+concurrency:
+  group: experimental-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
