@@ -1,113 +1,114 @@
 # Relay
 
-Postman-lite berbasis desktop (Tauri v2 + React + TypeScript + Rust).
-Request HTTP-nya dijalankan **native lewat Rust (`reqwest`)**, bukan `fetch()` di browser —
-jadi gak ada batasan CORS dan lebih ringan/cepat daripada webview biasa atau Electron.
-Ada juga dukungan **gRPC** (native lewat `tonic`/`prost`), baik lewat server reflection maupun
-`.proto` lokal (tanpa perlu server-nya expose reflection).
+A lightweight, Postman-style desktop client built with **Tauri v2 + React + TypeScript + Rust**.
 
-## Fitur yang sudah ada
+Requests run **natively through Rust** (`reqwest` for HTTP, `tonic`/`prost` for gRPC) instead of the browser's `fetch()` — no CORS restrictions, and lighter/faster than a webview-based or Electron app.
+
+Collections are stored as **plain-text `.relay` files** (one file per request/folder/environment), so diffs stay small and workspaces can be versioned and shared with git like regular source code.
+
+## Features
 
 ### HTTP
-- Sidebar collections: folder & request, nested, rename (double-click), delete, collapse
-- Multi-tab request (buka beberapa request sekaligus, tab dengan indikator unsaved `●`)
-- Params ⟷ URL auto-sync (ala Postman), auto-tambah row baru saat mulai ngetik
-- Headers, Body (none/json/text), tombol **Prettify** buat body JSON
-- Tab Headers bisa nampilin **auto-generated headers** (`User-Agent`, `Content-Type`, `Host`, `Content-Length`) yang bakal ke-attach otomatis kalau gak diisi manual — toggle show/hide, read-only
-- Default `User-Agent: Relay/x.y.z` selalu dikirim (bisa di-override manual) — biar API yang nolak client tanpa User-Agent (contoh: GitHub REST API) tetep jalan out of the box
-- Pre-request script & Tests (post-response script) dengan `pm` API mini:
+- Sidebar collections: folders & requests, nested, rename (double-click), delete, collapse
+- Multi-tab requests with unsaved-change indicator (`●`)
+- Params ⟷ URL two-way sync (Postman-style), auto-adds a new row as you type
+- **Path variables**: `:id`-style segments in the URL are auto-detected, highlighted, and get their own tab to fill in values
+- Headers, Body (none/json/text), **Prettify** button for JSON bodies
+- Auto-generated headers (`User-Agent`, `Content-Type`, `Host`, `Content-Length`) shown read-only when not set manually; toggleable
+- Default `User-Agent: Relay/x.y.z` sent unless overridden — keeps APIs that reject clientless requests (e.g. GitHub REST API) working out of the box
+- Pre-request & test scripts with a mini `pm` API, including autocomplete:
   - `pm.environment.get/set/unset`, `pm.variables.get/set`
   - `pm.request.method/url/body`, `pm.request.headers.add/upsert/remove/get`
   - `pm.response.code/status/responseTime/json()/text()/headers.get()`
   - `pm.test(name, fn)`, `pm.expect(x).to.equal/include/be.above/below/a/ok`
-- Environment/global variables (`{{var}}` di URL, header, body) — panel di bawah sidebar
-- Response viewer: status, waktu, ukuran, body, headers, test results, console log
+- `{{variable}}` autocomplete & syntax highlighting in URL, headers, and params
+- Environment & global variables panel
+- Response viewer: status, time, size, body, headers, test results, console log
+- Optional local response caching (toggle in Settings) — responses persist across restarts, never committed to git
 
 ### gRPC
-- Request gRPC (unary) lewat native Rust client (`tonic`), dua mode discovery service:
-  - **Server reflection** — auto-detect service/method dari server yang lagi jalan (butuh reflection enabled di server)
-  - **Imported .proto** — import folder root proto repo (scan rekursif, resolve import antar file persis kayak `protoc -I`), buat server yang reflection-nya dimatiin. Well-known types (`google/protobuf/*.proto`, `buf/validate/validate.proto`) sudah dibundle
-  - Proto yang diimport jadi **shared library di level workspace** (import sekali, dipakai semua request gRPC), picker "active spec file" cuma nampilin file yang beneran declare `service {}` (bukan file message/entity)
-- Tab **Service definition**: toggle reflection/imported, searchable dropdown milih active spec file (grouped by package)
-- Response panel gRPC: toggle **Response** (status, durasi, size, tab Body/Metadata — mirip response HTTP) vs **Log** (timeline SENT/RECV)
-- Tombol **Prettify** di message editor (JSON request body)
+- Unary requests through a native Rust client (`tonic`), two service-discovery modes:
+  - **Server reflection** — auto-detects services/methods from a running server
+  - **Imported `.proto`** — recursively scans and resolves imports like `protoc -I`, for servers with reflection disabled. Well-known types (`google/protobuf/*.proto`, `buf/validate/validate.proto`) are bundled
+  - Imported protos are a shared library at the workspace level (import once, reuse across requests)
+- **Service definition** tab: toggle reflection/imported, searchable method picker grouped by package
+- Response panel: **Response** (status/duration/size, Body/Metadata tabs) vs **Log** (SENT/RECV timeline)
+- **Prettify** button for the message editor
 
-### Umum
-- Body/response viewer (`CodeView`) pakai gutter nomor baris asli + garis vertikal + **collapsible fold** per object/array (bracket-matching, nomor baris gak berubah pas collapse — mirip VSCode)
-- Toggle light/dark & Settings ada di kanan atas panel utama
-- Semua collection, environment, & proto library disimpan otomatis ke disk (app data dir, `workspace.json`)
+### Git-native storage
+- Workspaces save as individual `.relay` files instead of one JSON blob — clean, reviewable git diffs
+- **Flat** (files directly in the project folder) or **Hidden** (`.relay/` subfolder) layout, chosen when creating a workspace; existing folders with other content default to hidden so nothing gets overwritten
+- Secret-marked variables are split into a gitignored `*.secret.relay` file, never committed
+- Built-in **Source Control** panel: current branch, changed-file count, commit from the sidebar
 
-## Belum ada / rencana ke depan
-- Streaming gRPC (server-stream/client-stream/bidi) — baru unary yang beneran jalan, sisanya masih mock
-- Drag & drop reorder folder/request (sekarang hanya add/rename/delete)
-- Auth tab (Bearer/Basic/OAuth) — sementara bisa manual lewat Headers atau pre-request script
-- Import/export collection (Postman/OpenAPI)
+### General
+- Read-only body/response viewer (`CodeView`) with line-number gutter and collapsible object/array folds (VSCode-style)
+- Light/dark theme toggle & Settings
+- Everything autosaves to disk
 
-## Menjalankan (development)
+## Roadmap
+- Streaming gRPC (server-stream/client-stream/bidi) — only unary is implemented so far
+- Drag & drop reorder for folders/requests
+- Auth tab (Bearer/Basic/OAuth) — for now, use Headers or a pre-request script
+- Import/export collections (Postman/OpenAPI)
 
-Prasyarat:
-- Node.js 18+ dan npm
-- Rust stable (`rustup`) — https://www.rust-lang.org/tools/install
-- Tauri system dependencies sesuai OS: https://v2.tauri.app/start/prerequisites/
-  (di Linux perlu `libwebkit2gtk-4.1-dev`, `libssl-dev`, `librsvg2-dev`, `build-essential`, dll — ada di link di atas)
+## Development
+
+Prerequisites:
+- Node.js 18+ and npm
+- Rust stable (via [rustup](https://www.rust-lang.org/tools/install))
+- Tauri system dependencies for your OS: see [v2.tauri.app/start/prerequisites](https://v2.tauri.app/start/prerequisites/)
+  (Linux needs `libwebkit2gtk-4.1-dev`, `libssl-dev`, `librsvg2-dev`, `build-essential`, etc.)
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-Ini akan buka window aplikasi desktop-nya langsung (hot-reload untuk frontend).
+This opens the desktop app window directly, with hot-reload for the frontend.
 
-## Build production
+## Production build
 
 ```bash
 npm run tauri build
 ```
 
-Hasil installer/executable ada di `src-tauri/target/release/bundle/`.
+Installers/executables land in `src-tauri/target/release/bundle/`.
 
-Icon di `src-tauri/icons/` masih placeholder sederhana (PNG saja, belum ada `.icns`/`.ico`).
-Untuk build production yang proper di semua OS, generate set icon lengkap dari 1 gambar sumber:
+## Releases
 
-```bash
-npm run tauri icon path/to/logo.png
-```
+Two GitHub Actions workflows handle builds:
 
-## Release (macOS + Windows)
+- **`experimental-release.yml`** — runs automatically on every push to `main`. Builds macOS (universal) + Windows + Linux, auto-bumps an experimental version tag (`v0.2.0-N`), and uploads to a **draft** GitHub Release for manual review before publishing.
+- **`release.yml`** — manual, versioned release. Run from the **Actions** tab, provide a version (e.g. `v0.2.0`), builds the same three platforms and uploads to a draft release.
 
-Ada GitHub Action manual (`.github/workflows/release.yml`) buat build & rilis:
-
-1. Buka tab **Actions** di repo → workflow **Release** → **Run workflow**
-2. Isi `version` (contoh `v0.1.0`)
-3. Workflow build macOS (universal, Intel+Apple Silicon) & Windows, terus upload installer-nya ke **draft** GitHub Release — review dulu asset-nya sebelum di-publish manual
-
-⚠️ Windows bundler (msi/nsis) butuh `.ico` — kalau icon masih placeholder PNG (lihat di atas), build Windows-nya bisa gagal. Generate icon lengkap dulu (`npm run tauri icon ...`) sebelum run release pertama kali.
-
-## Struktur
+## Project structure
 
 ```
-src/                    # frontend React + TypeScript
+src/                      # frontend — React + TypeScript
   components/
-    Sidebar.tsx, TabBar.tsx, KeyValueEditor.tsx, CodeEditor.tsx (editable), CodeView.tsx (read-only, gutter + fold)
-    RequestPanel.tsx, ResponsePanel.tsx           # HTTP
+    Sidebar.tsx, TabBar.tsx, KeyValueEditor.tsx, CodeEditor.tsx (editable), CodeView.tsx (read-only)
+    RequestPanel.tsx, ResponsePanel.tsx             # HTTP
     GrpcPanel.tsx, GrpcResponsePanel.tsx,
-    GrpcServicePicker.tsx, GrpcResponseLog.tsx     # gRPC
-    EnvironmentModal.tsx                          # env panel + theme/settings buttons (top-right main panel)
+    GrpcServicePicker.tsx, GrpcResponseLog.tsx       # gRPC
+    EnvironmentModal.tsx, SettingsModal.tsx, GitPanel.tsx
   lib/
-    pm.ts                # pre/post-request script engine (pm API)
-    tauri.ts             # invoke() wrappers ke Rust commands (HTTP + file/proto pickers)
-    grpcClient.ts         # invoke() wrappers khusus gRPC commands
-    useSendRequest.ts     # orkestrasi HTTP: pre-script -> native request -> test-script
-    highlight.ts          # syntax highlight dipakai bareng CodeEditor & CodeView
-  store.tsx             # context: workspace tree, tabs, proto library, persistence
-  types.ts              # tipe data + tree helpers
+    pm.ts                 # pre/post-request script engine
+    pmCompletions.ts       # pm API autocomplete tree
+    useVariableMenu.ts, urlHighlight.tsx  # {{variable}} autocomplete & highlighting
+    tauri.ts, grpcClient.ts # invoke() wrappers to Rust commands
+    useSendRequest.ts      # HTTP orchestration: pre-script -> native request -> test-script
+    highlight.ts           # syntax highlight shared by CodeEditor & CodeView
+  store.tsx               # workspace tree, tabs, proto library, persistence
+  types.ts                # data types + tree helpers
 
-src-tauri/               # backend Rust
+src-tauri/                # backend — Rust
   src/
-    commands.rs          # command http_request (reqwest, async)
-    grpc.rs              # gRPC: reflection client, local .proto parsing (protox), invoke_unary
-    storage.rs           # load/save workspace.json, baca folder .proto rekursif
-    wellknown/buf/validate/validate.proto   # bundled well-known type (protovalidate)
+    commands.rs           # http_request command (reqwest, async)
+    grpc.rs                # gRPC reflection client, local .proto parsing (protox), invoke_unary
+    storage.rs             # .relay folder read/write, layout detection, git-ignore setup
+    git.rs                 # in-app git status/commit via the `git` CLI
+    response_cache.rs      # local-only response cache (app data dir)
     main.rs
   tauri.conf.json
   capabilities/default.json
