@@ -9,6 +9,7 @@ import { useWorkspace } from "../store";
 import { useVariableMenu } from "../lib/useVariableMenu";
 import VariableMenuList from "./VariableMenuList";
 import { highlightUrlTokens } from "../lib/urlHighlight";
+import { renderMarkdown } from "../lib/markdown";
 
 function UrlInput({ value, onChange, onKeyDown, placeholder, variables }: {
   value: string;
@@ -210,7 +211,8 @@ interface Props {
 }
 
 export default function RequestPanel({ draft, loading, dirty, onChange, onSend, onSave }: Props) {
-  const [reqTab, setReqTab] = useState<"params" | "headers" | "body" | "scripts">("params");
+  const [reqTab, setReqTab] = useState<"docs" | "params" | "headers" | "body" | "scripts">("params");
+  const [docsMode, setDocsMode] = useState<"edit" | "preview">("edit");
   const [scriptTab, setScriptTab] = useState<"pre" | "post">("pre");
   const [showSnippet, setShowSnippet] = useState(false);
   const methodColor = METHOD_COLOR[draft.method] || METHOD_COLOR.GET;
@@ -283,6 +285,7 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
       <div className="px-4 mt-4">
         <div className="flex items-center gap-4 border-b border-th-border text-[12.5px] font-mono overflow-x-auto overflow-y-hidden">
           {[
+            ["docs", "Docs"],
             ["params", `Params${enabledParams ? ` (${enabledParams})` : ""}`],
             ["headers", `Headers${enabledHeaders ? ` (${enabledHeaders})` : ""}`],
             ["body", "Body"],
@@ -296,6 +299,9 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
               }`}
             >
               {label}
+              {key === "docs" && draft.description.trim() && (
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
+              )}
               {key === "scripts" && (draft.preScript.trim() || draft.testScript.trim()) && (
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
               )}
@@ -305,6 +311,39 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
       </div>
 
       <div className="px-4 py-3 flex-1 min-h-0 flex flex-col">
+        {reqTab === "docs" && (
+          <div className="flex flex-col flex-1 min-h-0 gap-1.5">
+            <div className="flex items-center gap-1 shrink-0">
+              {(["edit", "preview"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setDocsMode(m)}
+                  className={`px-2.5 py-1 rounded-md text-[12px] font-mono capitalize ring-1 transition-colors ${
+                    docsMode === m ? "bg-th-accent-bg text-th-accent-text ring-th-accent-border" : "bg-th-surface text-th-text-3 ring-th-border-input hover:text-th-text-1"
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            {docsMode === "edit" ? (
+              <textarea
+                value={draft.description}
+                onChange={(e) => onChange({ description: e.target.value })}
+                placeholder="Describe what this request does, its parameters, and anything else teammates should know… (Markdown supported)"
+                className="flex-1 min-h-0 resize-none bg-th-surface border border-th-border-input rounded-md px-3 py-2.5 text-[13px] font-sans leading-relaxed text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
+              />
+            ) : (
+              <div className="flex-1 min-h-0 overflow-y-auto bg-th-surface border border-th-border-input rounded-md px-4 py-3">
+                {draft.description.trim() ? (
+                  <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(draft.description) }} />
+                ) : (
+                  <span className="text-[13px] text-th-text-4">Nothing here yet — switch to Edit to write a description.</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {reqTab === "params" && (
           <div className="flex flex-col gap-4">
             <div>

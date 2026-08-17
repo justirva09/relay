@@ -5,6 +5,7 @@ import RequestPanel from "./components/RequestPanel";
 import ResponsePanel from "./components/ResponsePanel";
 import GrpcPanel from "./components/GrpcPanel";
 import GrpcResponsePanel from "./components/GrpcResponsePanel";
+import OverviewPage from "./components/OverviewPage";
 import { EnvironmentBar } from "./components/EnvironmentModal";
 import { WorkspaceProvider, useWorkspace } from "./store";
 import { ThemeProvider } from "./lib/theme";
@@ -179,9 +180,17 @@ function WorkspaceFolderBanner() {
 }
 
 function Main() {
-  const { workspace, tabs, activeTabId, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, setProtoLibrary } = useWorkspace();
+  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, setProtoLibrary } = useWorkspace();
   const activeTab = tabs.find((t) => t.nodeId === activeTabId) || null;
   const { responseLayout } = useLayout();
+  const [showOverview, setShowOverview] = useState(false);
+
+  // openTick bumps on every openTab() call, even re-clicking the tab that's
+  // already active — activeTabId alone wouldn't change in that case, leaving
+  // the overview stuck on screen after picking the same request again.
+  useEffect(() => {
+    if (openTick > 0) setShowOverview(false);
+  }, [openTick]);
 
   const [splitWidth, setSplitWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem("relay-split-width"));
@@ -310,9 +319,11 @@ function Main() {
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0">
         <WorkspaceFolderBanner />
-        <EnvironmentBar />
+        <EnvironmentBar onShowOverview={() => setShowOverview(true)} />
         <TabBar />
-        {activeTab ? (
+        {!activeTab || showOverview ? (
+          <OverviewPage />
+        ) : (
           <div ref={containerRef} className={`flex-1 flex min-h-0 ${responseLayout === "bottom" ? "flex-col" : ""}`}>
             {responseLayout === "side" ? (
               <>
@@ -341,10 +352,6 @@ function Main() {
                 </div>
               </>
             )}
-          </div>
-        ) : (
-          <div className="flex-1 grid place-items-center text-th-text-4 text-[13px] font-mono">
-            Select or create a request from the sidebar to get started
           </div>
         )}
       </div>

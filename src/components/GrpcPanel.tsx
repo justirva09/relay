@@ -1,10 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
 import { GrpcRequestData, GrpcMethodType, defaultMessageForMethodType } from "../types";
 import { MOCK_GRPC_SERVICES } from "../lib/grpcMock";
-import { listGrpcServices, listGrpcServicesFromProto, listProtoServiceFiles, GrpcCatalogService } from "../lib/grpcClient";
+import { listGrpcServices, listGrpcServicesFromProto, listProtoServiceFiles, fetchGrpcMethodSchema, GrpcCatalogService, ProtoFieldSchema } from "../lib/grpcClient";
 import CodeEditor from "./CodeEditor";
 import KeyValueEditor from "./KeyValueEditor";
 import GrpcServicePicker from "./GrpcServicePicker";
+
+function indent(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => "  " + l)
+    .join("\n");
+}
 
 const METHOD_TYPE_BADGE: Record<GrpcMethodType, string> = {
   unary: "unary",
@@ -241,6 +248,54 @@ interface Props {
 export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFiles, onImportProto, onRemoveProto }: Props) {
   const [tab, setTab] = useState<"message" | "metadata" | "definition">("message");
   const [serviceFiles, setServiceFiles] = useState<Set<string>>(new Set());
+  const [schemaFields, setSchemaFields] = useState<ProtoFieldSchema[] | undefined>(undefined);
+
+  const handleSelectMethod = (service: string, method: string, methodType: GrpcMethodType) => {
+    onChange({ service, method, methodType, messageJson: defaultMessageForMethodType(methodType) });
+    setSchemaFields(undefined);
+    const canUseImportedProto = draft.protoSource === "imported" && !!draft.activeProtoFile;
+    fetchGrpcMethodSchema({
+      url: draft.url,
+      service,
+      method,
+      protoFiles: canUseImportedProto ? protoFiles : undefined,
+      entryFile: canUseImportedProto ? draft.activeProtoFile : undefined,
+    })
+      .then((schema) => {
+        setSchemaFields(schema.fields);
+        const template = methodType === "client-stream" || methodType === "bidi" ? `[\n${indent(schema.template)}\n]` : schema.template;
+        onChange({ messageJson: template });
+      })
+      .catch(() => {}); // schema is a nicety — keep the plain default message on failure (e.g. unreachable server)
+  };
+
+  // Reopening a request that already has a service/method picked (a saved
+  // request, or switching back to a tab) doesn't go through handleSelectMethod
+  // — it needs its own schema fetch so field autocomplete comes back without
+  // the user having to re-pick the method every time.
+  useEffect(() => {
+    if (!draft.service || !draft.method) {
+      setSchemaFields(undefined);
+      return;
+    }
+    let cancelled = false;
+    const canUseImportedProto = draft.protoSource === "imported" && !!draft.activeProtoFile;
+    fetchGrpcMethodSchema({
+      url: draft.url,
+      service: draft.service,
+      method: draft.method,
+      protoFiles: canUseImportedProto ? protoFiles : undefined,
+      entryFile: canUseImportedProto ? draft.activeProtoFile : undefined,
+    })
+      .then((schema) => {
+        if (!cancelled) setSchemaFields(schema.fields);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.service, draft.method, draft.protoSource, draft.activeProtoFile]);
 
   useEffect(() => {
     if (protoFiles.length === 0) {
@@ -284,9 +339,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
           activeProtoFile={draft.activeProtoFile}
           service={draft.service}
           method={draft.method}
-          onSelect={(service, method, methodType) =>
-            onChange({ service, method, methodType, messageJson: defaultMessageForMethodType(methodType) })
-          }
+          onSelect={handleSelectMethod}
         />
         <button
           onClick={onSend}
@@ -350,6 +403,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
               value={draft.messageJson}
               onChange={(v) => onChange({ messageJson: v })}
               placeholder={messagePlaceholder}
+              protoFields={schemaFields}
               className="h-48 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
             />
             <span className="text-[11px] text-th-text-4 font-mono">

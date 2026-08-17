@@ -43,6 +43,12 @@ interface PostmanRequest {
   header?: PostmanHeader[];
   body?: PostmanBody;
   url?: string | PostmanUrl;
+  description?: string | { content?: string };
+}
+
+function extractDescription(desc: string | { content?: string } | undefined): string {
+  if (!desc) return "";
+  return typeof desc === "string" ? desc : desc.content || "";
 }
 
 interface PostmanItem {
@@ -139,6 +145,7 @@ function parsePostmanItem(item: PostmanItem): TreeNode {
     request: {
       method,
       url: rawUrl,
+      description: extractDescription(req.description),
       params: parseQueryToRows(rawUrl),
       pathParams: parsePathParamsFromUrl(rawUrl),
       headers,
@@ -224,6 +231,7 @@ function treeNodeToPostmanItem(node: TreeNode): PostmanItem | null {
       header: headers.length > 0 ? headers : undefined,
       body,
       url: urlObj,
+      ...(req.description.trim() ? { description: req.description } : {}),
     },
   };
 }

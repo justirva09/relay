@@ -3,7 +3,7 @@ import { TreeNode } from "../types";
 import { useWorkspace } from "../store";
 import GitPanel from "./GitPanel";
 
-const METHOD_COLOR: Record<string, string> = {
+export const METHOD_COLOR: Record<string, string> = {
   GET: "text-emerald-400",
   POST: "text-sky-400",
   PUT: "text-amber-400",
@@ -87,6 +87,26 @@ function flattenVisible(nodes: TreeNode[]): string[] {
   for (const n of nodes) {
     out.push(n.id);
     if (n.kind === "folder" && !n.collapsed) out.push(...flattenVisible(n.children));
+  }
+  return out;
+}
+
+// Returns a pruned copy of the tree containing only nodes matching `query`
+// (case-insensitive) plus the folders needed to reach them, force-expanded so
+// matches are actually visible. A folder whose own name matches keeps all of
+// its contents as-is, rather than filtering inside it too.
+function filterTree(nodes: TreeNode[], query: string): TreeNode[] {
+  const out: TreeNode[] = [];
+  for (const n of nodes) {
+    if (n.kind === "folder") {
+      const selfMatches = n.name.toLowerCase().includes(query);
+      const filteredChildren = selfMatches ? n.children : filterTree(n.children, query);
+      if (selfMatches || filteredChildren.length > 0) {
+        out.push({ ...n, collapsed: false, children: filteredChildren });
+      }
+    } else if (n.name.toLowerCase().includes(query)) {
+      out.push(n);
+    }
   }
   return out;
 }
@@ -341,12 +361,13 @@ const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 260;
 
 export default function Sidebar() {
-  const { workspace, addFolder, addRequest, addGrpcRequest, deleteNode, moveNodes, renameWorkspace } = useWorkspace();
+  const { workspace, addFolder, addRequest, addGrpcRequest, deleteNodes, moveNodes, renameWorkspace, collapseAllFolders } = useWorkspace();
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [triggerEditId, setTriggerEditId] = useState<string | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropInfo, setDropInfo] = useState<DropInfo | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -476,7 +497,7 @@ export default function Sidebar() {
       return;
     }
     if (e.shiftKey) {
-      const order = flattenVisible(workspace.tree);
+      const order = flattenVisible(displayTree);
       const anchor = lastSelectedId ?? nodeId;
       const ai = order.indexOf(anchor);
       const bi = order.indexOf(nodeId);
@@ -500,9 +521,19 @@ export default function Sidebar() {
     return true;
   };
 
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+  const displayTree = trimmedQuery ? filterTree(workspace.tree, trimmedQuery) : workspace.tree;
+
   const handleCtxMenu = (e: React.MouseEvent, node: TreeNode) => {
     e.preventDefault();
     e.stopPropagation();
+    // Right-clicking something outside the active multi-selection starts a
+    // fresh single-item selection; right-clicking a selected item keeps the
+    // whole group selected so the menu can offer bulk actions on it.
+    if (!(selectedIds.has(node.id) && selectedIds.size > 1)) {
+      setSelectedIds(new Set([node.id]));
+      setLastSelectedId(node.id);
+    }
     setCtxMenu({ x: e.clientX, y: e.clientY, nodeId: node.id, kind: node.kind });
   };
 
@@ -569,6 +600,40 @@ export default function Sidebar() {
           >
             📁
           </button>
+          <button
+            title="Collapse all folders"
+            onClick={() => collapseAllFolders()}
+            className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="7 13 12 18 17 13" />
+              <polyline points="7 6 12 11 17 6" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div className="px-3 py-2 border-b border-th-border shrink-0">
+        <div className="relative">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="absolute left-2 top-1/2 -translate-y-1/2 text-th-text-3 pointer-events-none">
+            <circle cx="11" cy="11" r="7" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search requests…"
+            className="w-full bg-th-bg border border-th-border-input rounded-md pl-7 pr-6 py-1.5 text-[12px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-th-text-3 hover:text-th-text-1 text-[13px] leading-none"
+              aria-label="Clear search"
+            >
+              ×
+            </button>
+          )}
         </div>
       </div>
 
@@ -576,9 +641,13 @@ export default function Sidebar() {
         className="flex-1 overflow-auto py-2"
         onClick={(e) => { if (e.target === e.currentTarget) setSelectedIds(new Set()); }}
       >
-        {workspace.tree.length === 0 && <div className="px-3 text-[12px] text-th-text-4 font-mono">no collections yet</div>}
-        {workspace.tree.map((n) => (
-          <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteId(id)} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={handleItemMouseDown} onItemClick={handleItemClick} />
+        {displayTree.length === 0 && (
+          <div className="px-3 text-[12px] text-th-text-4 font-mono">
+            {trimmedQuery ? "no matches" : "no collections yet"}
+          </div>
+        )}
+        {displayTree.map((n) => (
+          <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteIds([id])} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={handleItemMouseDown} onItemClick={handleItemClick} />
         ))}
       </div>
 
@@ -599,81 +668,99 @@ export default function Sidebar() {
           className="fixed z-50 bg-th-elevated border border-th-border rounded-md shadow-xl py-1 min-w-[160px]"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
         >
-          {ctxMenu.kind === "folder" && (
+          {selectedIds.size > 1 && selectedIds.has(ctxMenu.nodeId) ? (
+            <button
+              onClick={() => {
+                setPendingDeleteIds(Array.from(selectedIds));
+                setCtxMenu(null);
+              }}
+              className="w-full px-3 py-1.5 text-left text-[12.5px] text-rose-400 hover:bg-rose-400/10"
+            >
+              Delete {selectedIds.size} items
+            </button>
+          ) : (
             <>
+              {ctxMenu.kind === "folder" && (
+                <>
+                  <button
+                    onClick={() => {
+                      const id = addRequest(ctxMenu.nodeId);
+                      setCtxMenu(null);
+                      if (id) setTimeout(() => setTriggerEditId(id), 50);
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+                  >
+                    New HTTP Request
+                  </button>
+                  <button
+                    onClick={() => {
+                      const id = addGrpcRequest(ctxMenu.nodeId);
+                      setCtxMenu(null);
+                      if (id) setTimeout(() => setTriggerEditId(id), 50);
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+                  >
+                    New gRPC Request
+                  </button>
+                  <button
+                    onClick={() => {
+                      const id = addFolder(ctxMenu.nodeId);
+                      setCtxMenu(null);
+                      if (id) setTimeout(() => setTriggerEditId(id), 50);
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+                  >
+                    New Folder
+                  </button>
+                  <div className="my-1 border-t border-th-border" />
+                </>
+              )}
               <button
                 onClick={() => {
-                  const id = addRequest(ctxMenu.nodeId);
+                  setTriggerEditId(ctxMenu.nodeId);
                   setCtxMenu(null);
-                  if (id) setTimeout(() => setTriggerEditId(id), 50);
                 }}
                 className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
               >
-                New HTTP Request
+                Rename
               </button>
               <button
                 onClick={() => {
-                  const id = addGrpcRequest(ctxMenu.nodeId);
+                  setPendingDeleteIds([ctxMenu.nodeId]);
                   setCtxMenu(null);
-                  if (id) setTimeout(() => setTriggerEditId(id), 50);
                 }}
-                className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+                className="w-full px-3 py-1.5 text-left text-[12.5px] text-rose-400 hover:bg-rose-400/10"
               >
-                New gRPC Request
+                Delete
               </button>
-              <button
-                onClick={() => {
-                  const id = addFolder(ctxMenu.nodeId);
-                  setCtxMenu(null);
-                  if (id) setTimeout(() => setTriggerEditId(id), 50);
-                }}
-                className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
-              >
-                New Folder
-              </button>
-              <div className="my-1 border-t border-th-border" />
             </>
           )}
-          <button
-            onClick={() => {
-              setTriggerEditId(ctxMenu.nodeId);
-              setCtxMenu(null);
-            }}
-            className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
-          >
-            Rename
-          </button>
-          <button
-            onClick={() => {
-              setPendingDeleteId(ctxMenu.nodeId);
-              setCtxMenu(null);
-            }}
-            className="w-full px-3 py-1.5 text-left text-[12.5px] text-rose-400 hover:bg-rose-400/10"
-          >
-            Delete
-          </button>
         </div>
       )}
 
-      {pendingDeleteId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-th-overlay" onClick={() => setPendingDeleteId(null)}>
+      {pendingDeleteIds && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-th-overlay" onClick={() => setPendingDeleteIds(null)}>
           <div className="bg-th-surface border border-th-border rounded-lg shadow-2xl w-[340px] p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-[14px] font-semibold text-th-text-1 mb-2">Delete</h3>
             <p className="text-[13px] text-th-text-2 mb-5">
-              Delete <span className="text-th-text-1 font-mono">"{findName(pendingDeleteId)}"</span>? This cannot be undone.
+              {pendingDeleteIds.length === 1 ? (
+                <>Delete <span className="text-th-text-1 font-mono">"{findName(pendingDeleteIds[0])}"</span>? This cannot be undone.</>
+              ) : (
+                <>Delete <span className="text-th-text-1 font-mono">{pendingDeleteIds.length} items</span>? This cannot be undone.</>
+              )}
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
-                onClick={() => setPendingDeleteId(null)}
+                onClick={() => setPendingDeleteIds(null)}
                 className="px-3 py-1.5 rounded text-[12.5px] text-th-text-2 hover:text-th-text-1 hover:bg-th-hover"
               >
                 Cancel
               </button>
               <button
                 onClick={() => {
-                  const id = pendingDeleteId;
-                  setPendingDeleteId(null);
-                  deleteNode(id);
+                  const ids = pendingDeleteIds;
+                  setPendingDeleteIds(null);
+                  deleteNodes(ids);
                 }}
                 className="px-3 py-1.5 rounded text-[12.5px] bg-rose-500 text-white hover:bg-rose-400"
               >

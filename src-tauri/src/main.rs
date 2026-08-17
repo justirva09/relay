@@ -4,6 +4,7 @@
 mod commands;
 mod git;
 mod grpc;
+mod mock_server;
 mod models;
 mod response_cache;
 mod storage;
@@ -13,6 +14,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .manage(mock_server::MockServerState::default())
         .invoke_handler(tauri::generate_handler![
             commands::http_request,
             storage::load_workspace,
@@ -34,7 +36,11 @@ fn main() {
             grpc::grpc_list_services,
             grpc::grpc_list_services_from_proto,
             grpc::list_proto_service_files,
-            grpc::grpc_invoke_unary
+            grpc::grpc_method_schema,
+            grpc::grpc_invoke_unary,
+            mock_server::start_mock_server,
+            mock_server::stop_mock_server,
+            mock_server::mock_server_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

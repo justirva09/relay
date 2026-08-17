@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../store";
 import { KVRow, newRow } from "../types";
 import { useTheme } from "../lib/theme";
+import { useLayout } from "../lib/layout";
 import SettingsModal from "./SettingsModal";
 
 function EnvDropdown() {
@@ -62,20 +63,104 @@ function EnvDropdown() {
   );
 }
 
-export function EnvironmentBar() {
+export function EnvironmentBar({ onShowOverview }: { onShowOverview: () => void }) {
   const [showModal, setShowModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [urlCopied, setUrlCopied] = useState(false);
   const { theme, toggleTheme } = useTheme();
+  const { responseLayout, setResponseLayout } = useLayout();
+  const { mockServerRunningPort, toggleMockServer } = useWorkspace();
+
+  const handleCopyMockUrl = () => {
+    if (!mockServerRunningPort) return;
+    navigator.clipboard.writeText(`http://localhost:${mockServerRunningPort}`).then(() => {
+      setUrlCopied(true);
+      setTimeout(() => setUrlCopied(false), 1200);
+    });
+  };
 
   return (
     <>
       <div className="h-[49px] flex items-center justify-end gap-2 px-3 border-b border-th-border bg-th-bg shrink-0">
+        <button
+          title="Workspace overview"
+          onClick={onShowOverview}
+          className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg mr-1"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="3" width="7" height="7" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
+            <rect x="14" y="14" width="7" height="7" rx="1" />
+          </svg>
+        </button>
+        <div className="w-px h-5 bg-th-border mx-0.5" />
+        <button
+          title={mockServerRunningPort ? `Stop mock server (localhost:${mockServerRunningPort})` : "Start mock server"}
+          onClick={toggleMockServer}
+          className={`h-6 shrink-0 flex items-center gap-1 rounded-full pl-2 pr-2.5 text-[11px] font-mono leading-none transition-colors ${
+            mockServerRunningPort
+              ? "bg-rose-500/15 text-rose-400 hover:bg-rose-500/25"
+              : "bg-th-accent text-white hover:bg-th-accent-hover"
+          }`}
+        >
+          {mockServerRunningPort ? (
+            <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor" className="shrink-0"><rect x="6" y="6" width="12" height="12" rx="1.5" /></svg>
+          ) : (
+            <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor" className="shrink-0"><path d="M7 5l12 7-12 7V5z" /></svg>
+          )}
+          {mockServerRunningPort ? "Stop" : "Start"}
+        </button>
+        <span
+          className={`h-6 shrink-0 flex items-center rounded-full px-2.5 text-[11px] font-mono leading-none ${
+            mockServerRunningPort ? "bg-emerald-400/15 text-emerald-400" : "bg-th-hover text-th-text-3"
+          }`}
+        >
+          {mockServerRunningPort ? `Running :${mockServerRunningPort}` : "Stopped"}
+        </span>
+        {mockServerRunningPort && (
+          <button
+            title="Copy mock server URL"
+            onClick={handleCopyMockUrl}
+            className="h-6 w-6 shrink-0 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
+          >
+            {urlCopied ? (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+              </svg>
+            )}
+          </button>
+        )}
+        <div className="w-px h-5 bg-th-border mx-0.5" />
         <EnvDropdown />
         <button
           onClick={() => setShowModal(true)}
           className="px-2.5 py-1 rounded-md text-[12px] font-mono text-th-text-2 border border-th-border hover:text-th-text-1 hover:border-th-text-4"
         >
           Envs
+        </button>
+        <div className="w-px h-5 bg-th-border mx-0.5" />
+        <button
+          title={responseLayout === "side" ? "Switch response panel to bottom" : "Switch response panel to side"}
+          onClick={() => setResponseLayout(responseLayout === "side" ? "bottom" : "side")}
+          className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
+        >
+          {responseLayout === "side" ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="1.5" />
+              <line x1="12" y1="4" x2="12" y2="20" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="1.5" />
+              <line x1="3" y1="13" x2="21" y2="13" />
+            </svg>
+          )}
         </button>
         <div className="w-px h-5 bg-th-border mx-0.5" />
         <button

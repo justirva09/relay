@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Environment, FolderNode, GrpcLogEntry, GrpcRequestData, GrpcRequestNode, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, RequestNode, ResponseState, TabState, TreeNode, Workspace, defaultGrpcRequest, defaultRequest, demoWorkspace, newRow, normalizeRequestData, uid } from "./types";
-import { loadWorkspaceFile, pickCollectionFile, pickSavePath, readFileAtPath, writeFileAtPath, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles, loadResponseCache, saveResponseCache } from "./lib/tauri";
+import { loadWorkspaceFile, pickCollectionFile, pickSavePath, readFileAtPath, writeFileAtPath, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles, loadResponseCache, saveResponseCache, startMockServer as startMockServerTauri, stopMockServer as stopMockServerTauri, mockServerStatus as mockServerStatusTauri } from "./lib/tauri";
 import { runRequest } from "./lib/useSendRequest";
 import { isPostmanCollection, isRelayWorkspace, postmanToTree, treeToPostman } from "./lib/postman";
 import { isOpenApiSpec, parseOpenApiSpec, parseCollectionFile } from "./lib/openapi";
@@ -20,13 +20,25 @@ interface Ctx {
   renameWorkspace: (name: string) => void;
   responseCacheEnabled: boolean;
   setResponseCacheEnabled: (on: boolean) => void;
+  mockServerPort: number;
+  setMockServerPort: (port: number) => void;
+  mockServerRunningPort: number | null;
+  mockServerError: string | null;
+  toggleMockServer: () => Promise<void>;
   tabs: TabState[];
   activeTabId: string | null;
+  // Bumped on every openTab() call, including re-clicking the tab that's
+  // already active — activeTabId alone won't change in that case, but UI
+  // that wants to react to "a request was picked" (e.g. dismissing an
+  // overview screen) needs a signal that fires regardless.
+  openTick: number;
   addFolder: (parentId: string | null) => string;
   addRequest: (parentId: string | null) => string;
   renameNode: (id: string, name: string) => void;
   deleteNode: (id: string) => void;
+  deleteNodes: (ids: string[]) => void;
   toggleCollapse: (id: string) => void;
+  collapseAllFolders: () => void;
   openTab: (id: string) => void;
   closeTab: (id: string) => void;
   closeOtherTabs: (id: string) => void;
@@ -119,6 +131,7 @@ function basenameFromPath(path: string): string {
 }
 
 const RESPONSE_CACHE_SETTING_KEY = "relay-save-responses";
+const MOCK_SERVER_PORT_KEY = "relay-mock-server-port";
 
 type CachedResponse =
   | { kind: "http"; response: ResponseState }
@@ -132,8 +145,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [workspaceOpenError, setWorkspaceOpenError] = useState<string | null>(null);
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [openTick, setOpenTick] = useState(0);
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
   const [responseCacheEnabled, setResponseCacheEnabledState] = useState(() => localStorage.getItem(RESPONSE_CACHE_SETTING_KEY) !== "false");
+  const [mockServerPort, setMockServerPort] = useState<number>(() => Number(localStorage.getItem(MOCK_SERVER_PORT_KEY)) || 4010);
+  const [mockServerRunningPort, setMockServerRunningPort] = useState<number | null>(null);
+  const [mockServerError, setMockServerError] = useState<string | null>(null);
   const loaded = useRef(false);
   const grpcCancelRefs = useRef<Map<string, { current: boolean }>>(new Map());
   const responseCacheRef = useRef<Record<string, CachedResponse>>({});
@@ -141,6 +158,34 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const setResponseCacheEnabled = useCallback((on: boolean) => {
     localStorage.setItem(RESPONSE_CACHE_SETTING_KEY, String(on));
     setResponseCacheEnabledState(on);
+  }, []);
+
+  const setMockServerPortPersisted = useCallback((port: number) => {
+    localStorage.setItem(MOCK_SERVER_PORT_KEY, String(port));
+    setMockServerPort(port);
+  }, []);
+
+  const toggleMockServer = useCallback(async () => {
+    setMockServerError(null);
+    try {
+      if (mockServerRunningPort) {
+        await stopMockServerTauri();
+        setMockServerRunningPort(null);
+        return;
+      }
+      if (!workspaceDir) {
+        setMockServerError("Save this workspace to a folder first.");
+        return;
+      }
+      await startMockServerTauri(workspaceDir, mockServerPort);
+      setMockServerRunningPort(mockServerPort);
+    } catch (e: any) {
+      setMockServerError(e?.message || String(e));
+    }
+  }, [mockServerRunningPort, mockServerPort, workspaceDir]);
+
+  useEffect(() => {
+    mockServerStatusTauri().then(setMockServerRunningPort).catch(() => {});
   }, []);
 
   const persistResponseCache = useCallback((dir: string) => {
@@ -285,11 +330,32 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setActiveTabId((cur) => (cur === id ? null : cur));
   }, []);
 
+  const deleteNodes = useCallback((ids: string[]) => {
+    const idSet = new Set(ids);
+    const remove = (nodes: TreeNode[]): TreeNode[] => {
+      const out: TreeNode[] = [];
+      for (const n of nodes) {
+        if (idSet.has(n.id)) continue;
+        out.push(n.kind === "folder" ? { ...n, children: remove(n.children) } : n);
+      }
+      return out;
+    };
+    setWorkspace((ws) => ({ ...ws, tree: remove(ws.tree) }));
+    setTabs((t) => t.filter((tab) => !idSet.has(tab.nodeId)));
+    setActiveTabId((cur) => (cur && idSet.has(cur) ? null : cur));
+  }, []);
+
   const toggleCollapse = useCallback((id: string) => {
     setWorkspace((ws) => ({
       ...ws,
       tree: mapTree(ws.tree, id, (n) => (n.kind === "folder" ? { ...n, collapsed: !n.collapsed } : n)),
     }));
+  }, []);
+
+  const collapseAllFolders = useCallback(() => {
+    const collapseAll = (nodes: TreeNode[]): TreeNode[] =>
+      nodes.map((n) => (n.kind === "folder" ? { ...n, collapsed: true, children: collapseAll(n.children) } : n));
+    setWorkspace((ws) => ({ ...ws, tree: collapseAll(ws.tree) }));
   }, []);
 
   const openTab = useCallback(
@@ -322,9 +388,19 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         return [...t, tab];
       });
       setActiveTabId(id);
+      setOpenTick((t) => t + 1);
     },
     [workspace.tree, responseCacheEnabled]
   );
+
+  // Switching to a tab that's already open (clicked directly in the tab bar,
+  // not via the sidebar) doesn't go through openTab — still needs to bump
+  // openTick so UI reacting to "a request was picked" (e.g. dismissing the
+  // overview screen) fires even when activeTabId ends up unchanged.
+  const setActiveTab = useCallback((id: string) => {
+    setActiveTabId(id);
+    setOpenTick((t) => t + 1);
+  }, []);
 
   const forceCloseTab = useCallback(
     (id: string) => {
@@ -662,19 +738,27 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       renameWorkspace,
       responseCacheEnabled,
       setResponseCacheEnabled,
+      mockServerPort,
+      setMockServerPort: setMockServerPortPersisted,
+      mockServerRunningPort,
+      mockServerError,
+      toggleMockServer,
       tabs,
       activeTabId,
+      openTick,
       addFolder,
       addRequest,
       addGrpcRequest,
       renameNode,
       deleteNode,
+      deleteNodes,
       toggleCollapse,
+      collapseAllFolders,
       openTab,
       closeTab,
       closeOtherTabs,
       closeAllTabs,
-      setActiveTab: setActiveTabId,
+      setActiveTab,
       updateDraft,
       updateGrpcDraft,
       saveTab,
@@ -693,7 +777,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       moveNodes,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, tabs, activeTabId, addFolder, addRequest, addGrpcRequest, renameNode, deleteNode, toggleCollapse, openTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, exportCollection, moveNodes, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPortPersisted, mockServerRunningPort, mockServerError, toggleMockServer, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, exportCollection, moveNodes, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

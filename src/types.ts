@@ -21,6 +21,7 @@ export function newFormDataRow(): FormDataRow {
 export interface RequestData {
   method: Method;
   url: string;
+  description: string;
   params: KVRow[];
   pathParams: KVRow[];
   headers: KVRow[];
@@ -198,6 +199,7 @@ export function normalizeRequestData(req: any): RequestData {
     pathParams: Array.isArray(req.pathParams) ? req.pathParams : parsePathParamsFromUrl(req.url ?? "", req.pathParams),
     bodyForm: Array.isArray(req.bodyForm) ? req.bodyForm : [newFormDataRow()],
     bodyUrlencoded: Array.isArray(req.bodyUrlencoded) ? req.bodyUrlencoded : [newRow()],
+    description: typeof req.description === "string" ? req.description : "",
   };
 }
 
@@ -222,6 +224,7 @@ export function defaultRequest(method: Method = "GET", url = ""): RequestData {
   return {
     method,
     url,
+    description: "",
     params: parseQueryToRows(url),
     pathParams: parsePathParamsFromUrl(url),
     headers: [newRow()],

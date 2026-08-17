@@ -49,6 +49,29 @@ export function listProtoServiceFiles(files: ProtoFileInput[]): Promise<string[]
   return invoke("list_proto_service_files", { files });
 }
 
+export interface ProtoFieldSchema {
+  name: string;
+  kind: "string" | "number" | "bool" | "enum" | "message" | "map";
+  repeated: boolean;
+  fields?: ProtoFieldSchema[];
+  enumValues?: string[];
+}
+
+export interface GrpcMethodSchema {
+  template: string;
+  fields: ProtoFieldSchema[];
+}
+
+export function fetchGrpcMethodSchema(params: {
+  url: string;
+  service: string;
+  method: string;
+  protoFiles?: ProtoFileInput[];
+  entryFile?: string;
+}): Promise<GrpcMethodSchema> {
+  return invoke("grpc_method_schema", params);
+}
+
 export interface GrpcInvokeResult {
   json: string;
   metadata: [string, string][];

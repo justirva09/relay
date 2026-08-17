@@ -106,10 +106,10 @@ export async function pickAnyFile(): Promise<string | null> {
   return result as string | null;
 }
 
-export async function pickSavePath(defaultName: string): Promise<string | null> {
+export async function pickSavePath(defaultName: string, filterName = "JSON", extensions = ["json"]): Promise<string | null> {
   const result = await save({
     defaultPath: defaultName,
-    filters: [{ name: "JSON", extensions: ["json"] }],
+    filters: [{ name: filterName, extensions }],
   });
   return result as string | null;
 }
@@ -165,4 +165,19 @@ export function loadResponseCache(workspaceDir: string): Promise<string> {
 
 export function saveResponseCache(workspaceDir: string, data: string): Promise<void> {
   return invoke("save_response_cache", { workspaceDir, data });
+}
+
+// A local stand-in HTTP server, not the real backend — replies from this
+// workspace's cached example responses so a frontend can develop against an
+// API that isn't running (or isn't done) yet. See mock_server.rs.
+export function startMockServer(workspaceDir: string, port: number): Promise<void> {
+  return invoke("start_mock_server", { workspaceDir, port });
+}
+
+export function stopMockServer(): Promise<void> {
+  return invoke("stop_mock_server");
+}
+
+export function mockServerStatus(): Promise<number | null> {
+  return invoke("mock_server_status");
 }

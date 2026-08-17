@@ -1,6 +1,7 @@
 use prost::Message;
-use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
+use prost_reflect::{DescriptorPool, DynamicMessage, FieldDescriptor, Kind, MessageDescriptor};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -369,6 +370,133 @@ impl Codec for DynamicCodec {
     }
 }
 
+// Field info for the frontend's message-editor autocomplete — one node per
+// proto field, with nested `fields` for message-typed fields (recursed with a
+// cycle guard so a self-referential message doesn't recurse forever).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtoFieldSchema {
+    pub name: String,
+    pub kind: String,
+    pub repeated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<ProtoFieldSchema>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub enum_values: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct GrpcMethodSchema {
+    pub template: String,
+    pub fields: Vec<ProtoFieldSchema>,
+}
+
+fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFieldSchema {
+    let name = field.json_name().to_string();
+    let repeated = field.is_list();
+
+    if field.is_map() {
+        return ProtoFieldSchema { name, kind: "map".to_string(), repeated: false, fields: vec![], enum_values: vec![] };
+    }
+
+    match field.kind() {
+        Kind::Message(m) => {
+            let full_name = m.full_name().to_string();
+            if ancestors.contains(&full_name) {
+                ProtoFieldSchema { name, kind: "message".to_string(), repeated, fields: vec![], enum_values: vec![] }
+            } else {
+                let mut next = ancestors.clone();
+                next.insert(full_name);
+                let fields = m.fields().map(|f| field_schema(&f, &next)).collect();
+                ProtoFieldSchema { name, kind: "message".to_string(), repeated, fields, enum_values: vec![] }
+            }
+        }
+        Kind::Enum(e) => ProtoFieldSchema {
+            name,
+            kind: "enum".to_string(),
+            repeated,
+            fields: vec![],
+            enum_values: e.values().map(|v| v.name().to_string()).collect(),
+        },
+        Kind::Bool => ProtoFieldSchema { name, kind: "bool".to_string(), repeated, fields: vec![], enum_values: vec![] },
+        Kind::String | Kind::Bytes => ProtoFieldSchema { name, kind: "string".to_string(), repeated, fields: vec![], enum_values: vec![] },
+        _ => ProtoFieldSchema { name, kind: "number".to_string(), repeated, fields: vec![], enum_values: vec![] },
+    }
+}
+
+// proto3 JSON mapping requires 64-bit ints as decimal strings, everything else
+// as a plain JSON number — matches what prost_reflect expects on the way back in.
+fn scalar_placeholder(kind: &Kind) -> serde_json::Value {
+    match kind {
+        Kind::Int64 | Kind::Uint64 | Kind::Sint64 | Kind::Fixed64 | Kind::Sfixed64 => json!("0"),
+        Kind::Bool => json!(false),
+        Kind::String | Kind::Bytes => json!(""),
+        _ => json!(0),
+    }
+}
+
+fn field_placeholder(field: &FieldDescriptor, ancestors: &HashSet<String>) -> serde_json::Value {
+    if field.is_map() {
+        return json!({});
+    }
+
+    let single = |kind: &Kind, ancestors: &HashSet<String>| -> serde_json::Value {
+        match kind {
+            Kind::Message(m) => message_template(m, ancestors),
+            Kind::Enum(e) => json!(e.values().next().map(|v| v.name().to_string()).unwrap_or_default()),
+            other => scalar_placeholder(other),
+        }
+    };
+
+    if field.is_list() {
+        json!([single(&field.kind(), ancestors)])
+    } else {
+        single(&field.kind(), ancestors)
+    }
+}
+
+fn message_template(desc: &MessageDescriptor, ancestors: &HashSet<String>) -> serde_json::Value {
+    let full_name = desc.full_name().to_string();
+    if ancestors.contains(&full_name) {
+        return json!({});
+    }
+    let mut next = ancestors.clone();
+    next.insert(full_name);
+
+    let mut obj = serde_json::Map::new();
+    for field in desc.fields() {
+        obj.insert(field.json_name().to_string(), field_placeholder(&field, &next));
+    }
+    serde_json::Value::Object(obj)
+}
+
+#[tauri::command]
+pub async fn grpc_method_schema(
+    url: String,
+    service: String,
+    method: String,
+    proto_files: Option<Vec<ProtoFileInput>>,
+    entry_file: Option<String>,
+) -> Result<GrpcMethodSchema, String> {
+    let pool = match (&proto_files, &entry_file) {
+        (Some(files), Some(entry_file)) => build_pool_from_proto_files(files, entry_file)?,
+        _ => build_pool_for_service(&url, &service).await?,
+    };
+    let service_desc = pool.get_service_by_name(&service).ok_or_else(|| format!("service {} not found", service))?;
+    let method_desc = service_desc
+        .methods()
+        .find(|m| m.name() == method)
+        .ok_or_else(|| format!("method {} not found on {}", method, service))?;
+    let input_desc = method_desc.input();
+
+    let ancestors = HashSet::new();
+    let template_value = message_template(&input_desc, &ancestors);
+    let template = serde_json::to_string_pretty(&template_value).map_err(|e| e.to_string())?;
+    let fields = input_desc.fields().map(|f| field_schema(&f, &ancestors)).collect();
+
+    Ok(GrpcMethodSchema { template, fields })
+}
+
 #[tauri::command]
 pub async fn grpc_invoke_unary(payload: GrpcInvokeRequest) -> Result<GrpcInvokeResponse, String> {
     let pool = match (&payload.proto_files, &payload.entry_file) {
@@ -447,4 +575,84 @@ pub async fn grpc_invoke_unary(payload: GrpcInvokeRequest) -> Result<GrpcInvokeR
         metadata,
         duration_ms,
     })
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    const TEST_PROTO: &str = r#"
+        syntax = "proto3";
+        package test;
+
+        enum Status {
+            STATUS_UNKNOWN = 0;
+            STATUS_ACTIVE = 1;
+        }
+
+        message Node {
+            string label = 1;
+            repeated Node children = 2;
+        }
+
+        message CreatePetRequest {
+            string name = 1;
+            int32 age = 2;
+            int64 owner_id = 3;
+            bool vaccinated = 4;
+            Status status = 5;
+            repeated string tags = 6;
+            Node tree = 7;
+            map<string, string> metadata = 8;
+        }
+
+        service PetService {
+            rpc CreatePet(CreatePetRequest) returns (CreatePetRequest);
+        }
+    "#;
+
+    fn test_pool() -> DescriptorPool {
+        let files = vec![ProtoFileInput { name: "test.proto".to_string(), content: TEST_PROTO.to_string() }];
+        build_pool_from_proto_files(&files, "test.proto").expect("proto should compile")
+    }
+
+    #[test]
+    fn generates_template_and_schema_for_all_field_kinds() {
+        let pool = test_pool();
+        let service = pool.get_service_by_name("test.PetService").unwrap();
+        let method = service.methods().find(|m| m.name() == "CreatePet").unwrap();
+        let input = method.input();
+
+        let ancestors = HashSet::new();
+        let template = message_template(&input, &ancestors);
+        let obj = template.as_object().unwrap();
+
+        assert_eq!(obj["name"], json!(""));
+        assert_eq!(obj["age"], json!(0));
+        assert_eq!(obj["ownerId"], json!("0"), "int64 must be a JSON string per proto3 JSON mapping");
+        assert_eq!(obj["vaccinated"], json!(false));
+        assert_eq!(obj["status"], json!("STATUS_UNKNOWN"), "enum defaults to its first value's name");
+        assert_eq!(obj["tags"], json!([""]));
+        assert_eq!(obj["metadata"], json!({}), "map fields placeholder as an empty object");
+        assert!(obj["tree"].is_object(), "nested message field recurses into an object");
+
+        let fields = input.fields().map(|f| field_schema(&f, &ancestors)).collect::<Vec<_>>();
+        let status_field = fields.iter().find(|f| f.name == "status").unwrap();
+        assert_eq!(status_field.kind, "enum");
+        assert_eq!(status_field.enum_values, vec!["STATUS_UNKNOWN", "STATUS_ACTIVE"]);
+
+        let tree_field = fields.iter().find(|f| f.name == "tree").unwrap();
+        assert_eq!(tree_field.kind, "message");
+        assert!(tree_field.fields.iter().any(|f| f.name == "label"));
+    }
+
+    #[test]
+    fn self_referential_message_does_not_infinite_loop() {
+        let pool = test_pool();
+        let node = pool.get_message_by_name("test.Node").unwrap();
+        let ancestors = HashSet::new();
+        // Node.children is `repeated Node` — must terminate instead of recursing forever.
+        let template = message_template(&node, &ancestors);
+        assert!(template.is_object());
+    }
 }

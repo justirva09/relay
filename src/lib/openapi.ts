@@ -200,8 +200,17 @@ export function parseOpenApiSpec(spec: any): { tree: TreeNode[]; name: string; v
       const name: string = operation.summary || operation.operationId || `${method} ${rawPath}`;
       const groupName: string = operation.tags?.[0] || firstPathSegment(rawPath);
 
+      const paramDocs = allParams
+        .filter((p) => p.description)
+        .map((p) => `- \`${p.name}\` (${p.in}): ${p.description}`)
+        .join("\n");
+      const description = [operation.description, paramDocs ? `**Parameters:**\n${paramDocs}` : ""]
+        .filter(Boolean)
+        .join("\n\n");
+
       const request: RequestNode["request"] = {
         ...defaultRequest(method, fullUrl),
+        description,
         params: queryRows.length ? queryRows : [newRow()],
         pathParams: pathParamRows,
         headers: headerRows,
