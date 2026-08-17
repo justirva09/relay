@@ -10,6 +10,7 @@ import { WorkspaceProvider, useWorkspace } from "./store";
 import { ThemeProvider } from "./lib/theme";
 import { LayoutProvider, useLayout } from "./lib/layout";
 import { pickProtoFolder, listProtoFilesInDir } from "./lib/tauri";
+import VersionGate from "./components/VersionGate";
 
 function UnsavedModal() {
   const { pendingCloseId, confirmCloseTab, workspace } = useWorkspace();
@@ -355,12 +356,14 @@ function Main() {
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <LayoutProvider>
-        <WorkspaceProvider>
-          <Main />
-        </WorkspaceProvider>
-      </LayoutProvider>
-    </ThemeProvider>
+    <VersionGate>
+      <ThemeProvider>
+        <LayoutProvider>
+          <WorkspaceProvider>
+            <Main />
+          </WorkspaceProvider>
+        </LayoutProvider>
+      </ThemeProvider>
+    </VersionGate>
   );
 }

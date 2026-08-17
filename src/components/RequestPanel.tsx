@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Method, RequestData, buildUrlFromParams, parseQueryToRows, parsePathParamsFromUrl } from "../types";
 import KeyValueEditor, { ValueInput } from "./KeyValueEditor";
+import FormDataEditor from "./FormDataEditor";
 import CodeEditor from "./CodeEditor";
 import CodeSnippetModal from "./CodeSnippetModal";
 import { PM_PRE_COMPLETIONS, PM_TEST_COMPLETIONS } from "../lib/pmCompletions";
@@ -156,6 +157,8 @@ function computeAutoHeaders(draft: RequestData): [string, string][] {
   const rows: [string, string][] = [["Host", "<calculated when request is sent>"]];
   if (!userHas("user-agent")) rows.push(["User-Agent", "Relay/0.1.0"]);
   if (draft.bodyMode === "json" && !userHas("content-type")) rows.push(["Content-Type", "application/json"]);
+  if (draft.bodyMode === "form-data" && !userHas("content-type")) rows.push(["Content-Type", "multipart/form-data; boundary=<calculated when request is sent>"]);
+  if (draft.bodyMode === "urlencoded" && !userHas("content-type")) rows.push(["Content-Type", "application/x-www-form-urlencoded"]);
   if (draft.bodyMode !== "none") rows.push(["Content-Length", "<calculated when request is sent>"]);
   return rows;
 }
@@ -342,7 +345,7 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
         {reqTab === "body" && (
           <div className="flex flex-col gap-2">
             <div className="flex gap-1.5">
-              {(["none", "json", "text"] as const).map((m) => (
+              {(["none", "json", "text", "form-data", "urlencoded"] as const).map((m) => (
                 <button
                   key={m}
                   onClick={() => onChange({ bodyMode: m })}
@@ -354,7 +357,19 @@ export default function RequestPanel({ draft, loading, dirty, onChange, onSend, 
                 </button>
               ))}
             </div>
-            {draft.bodyMode !== "none" && (
+            {draft.bodyMode === "form-data" && (
+              <FormDataEditor rows={draft.bodyForm} onChangeRows={(bodyForm) => onChange({ bodyForm })} variables={variableNames} />
+            )}
+            {draft.bodyMode === "urlencoded" && (
+              <KeyValueEditor
+                rows={draft.bodyUrlencoded}
+                onChangeRows={(bodyUrlencoded) => onChange({ bodyUrlencoded })}
+                placeholderKey="key"
+                placeholderVal="value"
+                variables={variableNames}
+              />
+            )}
+            {draft.bodyMode !== "none" && draft.bodyMode !== "form-data" && draft.bodyMode !== "urlencoded" && (
               <div className="flex flex-col gap-1.5">
                 {draft.bodyMode === "json" && (
                   <div className="flex justify-end">

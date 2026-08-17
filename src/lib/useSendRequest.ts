@@ -1,7 +1,7 @@
 import CryptoJS from "crypto-js";
 import { buildPm, substituteVars, substitutePathParams, TestResultDraft } from "./pm";
 import { sendHttpRequest } from "./tauri";
-import { KVRow, RequestData, ResponseState } from "../types";
+import { KVRow, RequestData, ResponseState, encodeUrlencodedRows } from "../types";
 
 export async function runRequest(
   req: RequestData,
@@ -21,7 +21,7 @@ export async function runRequest(
     method: req.method,
     url: req.url,
     headers: req.headers.filter((h) => h.enabled && h.key.trim()).map((h) => ({ key: h.key, value: h.value })),
-    body: req.bodyMode !== "none" ? req.bodyText : undefined,
+    body: req.bodyMode !== "none" && req.bodyMode !== "form-data" && req.bodyMode !== "urlencoded" ? req.bodyText : undefined,
   };
 
   const libs: Record<string, any> = { "crypto-js": CryptoJS };
@@ -42,10 +42,29 @@ export async function runRequest(
 
   const subUrl = substituteVars(substitutePathParams(scriptRequest.url, req.pathParams), varsObj) ?? "";
   const subHeaders: [string, string][] = scriptRequest.headers.map((h) => [h.key, substituteVars(h.value, varsObj) ?? ""]);
-  const subBody = scriptRequest.body !== undefined ? substituteVars(scriptRequest.body, varsObj) : undefined;
+  let subBody = scriptRequest.body !== undefined ? substituteVars(scriptRequest.body, varsObj) : undefined;
   if (req.bodyMode === "json" && !subHeaders.some(([k]) => k.toLowerCase() === "content-type")) {
     subHeaders.push(["Content-Type", "application/json"]);
   }
+  if (req.bodyMode === "urlencoded") {
+    subBody = encodeUrlencodedRows(
+      req.bodyUrlencoded.map((r) => ({ ...r, value: substituteVars(r.value, varsObj) ?? r.value }))
+    );
+    if (!subHeaders.some(([k]) => k.toLowerCase() === "content-type")) {
+      subHeaders.push(["Content-Type", "application/x-www-form-urlencoded"]);
+    }
+  }
+
+  const formData =
+    req.bodyMode === "form-data"
+      ? req.bodyForm
+          .filter((f) => f.enabled && f.key.trim())
+          .map((f) => ({
+            key: f.key,
+            value: f.type === "file" ? f.value : substituteVars(f.value, varsObj) ?? "",
+            is_file: f.type === "file",
+          }))
+      : undefined;
 
   const syncVars = () => {
     const rows: KVRow[] = Object.entries(varsObj)
@@ -60,6 +79,7 @@ export async function runRequest(
       url: subUrl,
       headers: subHeaders,
       body: ["GET", "HEAD"].includes(scriptRequest.method) ? undefined : subBody,
+      form_data: ["GET", "HEAD"].includes(scriptRequest.method) ? undefined : formData,
     });
 
     const scriptResponse = {

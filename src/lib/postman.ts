@@ -1,4 +1,4 @@
-import { TreeNode, FolderNode, RequestNode, KVRow, Method, defaultRequest, newRow, uid, parseQueryToRows, parsePathParamsFromUrl } from "../types";
+import { TreeNode, FolderNode, RequestNode, KVRow, Method, BodyMode, FormDataRow, defaultRequest, newRow, newFormDataRow, uid, parseQueryToRows, parsePathParamsFromUrl } from "../types";
 
 const POSTMAN_SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
 
@@ -8,10 +8,26 @@ interface PostmanHeader {
   disabled?: boolean;
 }
 
+interface PostmanFormDataField {
+  key: string;
+  value?: string;
+  src?: string;
+  type?: "text" | "file";
+  disabled?: boolean;
+}
+
+interface PostmanUrlencodedField {
+  key: string;
+  value?: string;
+  disabled?: boolean;
+}
+
 interface PostmanBody {
   mode?: string;
   raw?: string;
   options?: { raw?: { language?: string } };
+  formdata?: PostmanFormDataField[];
+  urlencoded?: PostmanUrlencodedField[];
 }
 
 interface PostmanUrl {
@@ -80,8 +96,10 @@ function parsePostmanItem(item: PostmanItem): TreeNode {
     headers.push(newRow());
   }
 
-  let bodyMode: "none" | "json" | "text" = "none";
+  let bodyMode: BodyMode = "none";
   let bodyText = "";
+  let bodyForm: FormDataRow[] = [newFormDataRow()];
+  let bodyUrlencoded: KVRow[] = [newRow()];
   if (req.body) {
     if (req.body.mode === "raw" && req.body.raw !== undefined) {
       bodyText = req.body.raw;
@@ -92,6 +110,25 @@ function parsePostmanItem(item: PostmanItem): TreeNode {
           bodyMode = "json";
         } catch {}
       }
+    } else if (req.body.mode === "formdata" && Array.isArray(req.body.formdata)) {
+      bodyMode = "form-data";
+      bodyForm = req.body.formdata.map((f: any) => ({
+        id: uid(),
+        key: f.key ?? "",
+        value: f.type === "file" ? f.src ?? "" : f.value ?? "",
+        enabled: !f.disabled,
+        type: f.type === "file" ? "file" : "text",
+      }));
+      if (bodyForm.length === 0) bodyForm = [newFormDataRow()];
+    } else if (req.body.mode === "urlencoded" && Array.isArray(req.body.urlencoded)) {
+      bodyMode = "urlencoded";
+      bodyUrlencoded = req.body.urlencoded.map((f: any) => ({
+        id: uid(),
+        key: f.key ?? "",
+        value: f.value ?? "",
+        enabled: !f.disabled,
+      }));
+      if (bodyUrlencoded.length === 0) bodyUrlencoded = [newRow()];
     }
   }
 
@@ -107,6 +144,8 @@ function parsePostmanItem(item: PostmanItem): TreeNode {
       headers,
       bodyMode,
       bodyText,
+      bodyForm,
+      bodyUrlencoded,
       preScript: "",
       testScript: "",
     },
@@ -141,6 +180,24 @@ function treeNodeToPostmanItem(node: TreeNode): PostmanItem | null {
     body = { mode: "raw", raw: req.bodyText, options: { raw: { language: "json" } } };
   } else if (req.bodyMode === "text") {
     body = { mode: "raw", raw: req.bodyText };
+  } else if (req.bodyMode === "form-data") {
+    body = {
+      mode: "formdata",
+      formdata: req.bodyForm
+        .filter((f) => f.key.trim())
+        .map((f) =>
+          f.type === "file"
+            ? { key: f.key, type: "file", src: f.value, ...(f.enabled ? {} : { disabled: true }) }
+            : { key: f.key, type: "text", value: f.value, ...(f.enabled ? {} : { disabled: true }) }
+        ),
+    };
+  } else if (req.bodyMode === "urlencoded") {
+    body = {
+      mode: "urlencoded",
+      urlencoded: req.bodyUrlencoded
+        .filter((f) => f.key.trim())
+        .map((f) => ({ key: f.key, value: f.value, ...(f.enabled ? {} : { disabled: true }) })),
+    };
   }
 
   const urlObj: PostmanUrl = { raw: req.url };

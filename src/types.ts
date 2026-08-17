@@ -8,7 +8,15 @@ export interface KVRow {
   secret?: boolean;
 }
 
-export type BodyMode = "none" | "json" | "text";
+export type BodyMode = "none" | "json" | "text" | "form-data" | "urlencoded";
+
+export interface FormDataRow extends KVRow {
+  type: "text" | "file";
+}
+
+export function newFormDataRow(): FormDataRow {
+  return { ...newRow(), type: "text" };
+}
 
 export interface RequestData {
   method: Method;
@@ -18,6 +26,8 @@ export interface RequestData {
   headers: KVRow[];
   bodyMode: BodyMode;
   bodyText: string;
+  bodyForm: FormDataRow[];
+  bodyUrlencoded: KVRow[];
   preScript: string;
   testScript: string;
 }
@@ -186,7 +196,16 @@ export function normalizeRequestData(req: any): RequestData {
   return {
     ...req,
     pathParams: Array.isArray(req.pathParams) ? req.pathParams : parsePathParamsFromUrl(req.url ?? "", req.pathParams),
+    bodyForm: Array.isArray(req.bodyForm) ? req.bodyForm : [newFormDataRow()],
+    bodyUrlencoded: Array.isArray(req.bodyUrlencoded) ? req.bodyUrlencoded : [newRow()],
   };
+}
+
+export function encodeUrlencodedRows(rows: KVRow[]): string {
+  return rows
+    .filter((r) => r.enabled && r.key.trim())
+    .map((r) => `${encodeURIComponent(r.key)}=${encodeURIComponent(r.value)}`)
+    .join("&");
 }
 
 export function buildUrlFromParams(fullUrl: string, rows: KVRow[]): string {
@@ -208,6 +227,8 @@ export function defaultRequest(method: Method = "GET", url = ""): RequestData {
     headers: [newRow()],
     bodyMode: "none",
     bodyText: "",
+    bodyForm: [newFormDataRow()],
+    bodyUrlencoded: [newRow()],
     preScript: "",
     testScript: "",
   };

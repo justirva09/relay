@@ -130,7 +130,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
 
           <section>
             <h3 className="text-[12px] font-mono text-th-text-3 uppercase tracking-wide mb-2">Collection Data</h3>
-            <p className="text-[12px] text-th-text-3 mb-3">Import a Postman collection (v2.1) or a Relay workspace file, or export your current collection as Postman-compatible JSON.</p>
+            <p className="text-[12px] text-th-text-3 mb-3">Import a Postman collection (v2.1), OpenAPI 3.x spec (JSON/YAML), or a Relay workspace file, or export your current collection.</p>
             <div className="flex items-center gap-2">
               <button
                 onClick={handleImport}

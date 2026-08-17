@@ -7,6 +7,7 @@ mod grpc;
 mod models;
 mod response_cache;
 mod storage;
+mod version_check;
 
 fn main() {
     tauri::Builder::default()
@@ -29,6 +30,7 @@ fn main() {
             git::git_commit,
             response_cache::load_response_cache,
             response_cache::save_response_cache,
+            version_check::check_version_status,
             grpc::grpc_list_services,
             grpc::grpc_list_services_from_proto,
             grpc::list_proto_service_files,

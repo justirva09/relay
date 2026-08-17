@@ -1,23 +1,45 @@
-import { RequestData } from "../types";
+import { RequestData, encodeUrlencodedRows } from "../types";
 import { substituteVars, substitutePathParams } from "./pm";
+
+export interface SnippetFormField {
+  key: string;
+  value: string;
+  isFile: boolean;
+}
 
 export interface SnippetRequest {
   method: string;
   url: string;
   headers: [string, string][];
   body?: string;
+  formData?: SnippetFormField[];
 }
 
 export function toSnippetRequest(draft: RequestData, vars: Record<string, string> = {}): SnippetRequest {
   const headers: [string, string][] = draft.headers
     .filter((h) => h.enabled && h.key.trim())
     .map((h) => [h.key, substituteVars(h.value, vars) ?? h.value]);
-  const body = draft.bodyMode !== "none" ? substituteVars(draft.bodyText, vars) : undefined;
+  let body =
+    draft.bodyMode !== "none" && draft.bodyMode !== "form-data" && draft.bodyMode !== "urlencoded"
+      ? substituteVars(draft.bodyText, vars)
+      : undefined;
   if (draft.bodyMode === "json" && body !== undefined && !headers.some(([k]) => k.toLowerCase() === "content-type")) {
     headers.push(["Content-Type", "application/json"]);
   }
+  if (draft.bodyMode === "urlencoded") {
+    body = encodeUrlencodedRows(draft.bodyUrlencoded.map((r) => ({ ...r, value: substituteVars(r.value, vars) ?? r.value })));
+    if (!headers.some(([k]) => k.toLowerCase() === "content-type")) {
+      headers.push(["Content-Type", "application/x-www-form-urlencoded"]);
+    }
+  }
+  const formData =
+    draft.bodyMode === "form-data"
+      ? draft.bodyForm
+          .filter((f) => f.enabled && f.key.trim())
+          .map((f) => ({ key: f.key, value: f.type === "file" ? f.value : substituteVars(f.value, vars) ?? f.value, isFile: f.type === "file" }))
+      : undefined;
   const url = substituteVars(substitutePathParams(draft.url, draft.pathParams), vars) || "https://api.example.com";
-  return { method: draft.method, url, headers, body };
+  return { method: draft.method, url, headers, body, formData };
 }
 
 function esc(s: string) {
@@ -48,7 +70,14 @@ export function generateSnippet(lang: SnippetLang, req: SnippetRequest): string 
     case "cURL": {
       const lines = [`curl --request ${req.method} \\`, `  --url '${shEsc(req.url)}'`];
       for (const [k, v] of req.headers) lines.push(` \\\n  --header '${shEsc(k)}: ${shEsc(v)}'`);
-      if (hasBody(req)) lines.push(` \\\n  --data '${shEsc(req.body!)}'`);
+      if (req.formData?.length) {
+        for (const f of req.formData) {
+          const val = f.isFile ? `@${shEsc(f.value)}` : shEsc(f.value);
+          lines.push(` \\\n  --form '${shEsc(f.key)}=${val}'`);
+        }
+      } else if (hasBody(req)) {
+        lines.push(` \\\n  --data '${shEsc(req.body!)}'`);
+      }
       return lines.join("");
     }
 

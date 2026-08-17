@@ -1,8 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Environment, FolderNode, GrpcLogEntry, GrpcRequestData, GrpcRequestNode, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, RequestNode, ResponseState, TabState, TreeNode, Workspace, defaultGrpcRequest, defaultRequest, demoWorkspace, newRow, normalizeRequestData, uid } from "./types";
-import { loadWorkspaceFile, pickJsonFile, pickSavePath, readFileAtPath, writeFileAtPath, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles, loadResponseCache, saveResponseCache } from "./lib/tauri";
+import { loadWorkspaceFile, pickCollectionFile, pickSavePath, readFileAtPath, writeFileAtPath, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles, loadResponseCache, saveResponseCache } from "./lib/tauri";
 import { runRequest } from "./lib/useSendRequest";
 import { isPostmanCollection, isRelayWorkspace, postmanToTree, treeToPostman } from "./lib/postman";
+import { isOpenApiSpec, parseOpenApiSpec, parseCollectionFile } from "./lib/openapi";
 import { simulateGrpcCall } from "./lib/grpcMock";
 import { invokeGrpcUnary } from "./lib/grpcClient";
 
@@ -44,7 +45,7 @@ interface Ctx {
   setEnvironmentVariables: (envId: string, rows: KVRow[]) => void;
   importCollection: () => Promise<void>;
   exportCollection: () => Promise<{ skippedGrpcCount: number } | null>;
-  moveNode: (nodeId: string, targetId: string, position: "before" | "after" | "inside") => void;
+  moveNodes: (nodeIds: string[], targetId: string, position: "before" | "after" | "inside") => void;
   addGrpcRequest: (parentId: string | null) => string;
   updateGrpcDraft: (id: string, patch: Partial<GrpcRequestData>) => void;
   sendGrpcTab: (id: string) => Promise<void>;
@@ -454,39 +455,42 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const moveNode = useCallback((nodeId: string, targetId: string, position: "before" | "after" | "inside") => {
+  const moveNodes = useCallback((nodeIds: string[], targetId: string, position: "before" | "after" | "inside") => {
     setWorkspace((ws) => {
-      if (nodeId === targetId) return ws;
+      const idSet = new Set(nodeIds.filter((id) => id !== targetId));
+      if (idSet.size === 0) return ws;
 
-      const drag = findNode(ws.tree, nodeId);
-      if (!drag) return ws;
-      if (drag.kind === "folder") {
-        const hasDescendant = (nodes: TreeNode[], id: string): boolean => {
-          for (const n of nodes) {
-            if (n.id === id) return true;
-            if (n.kind === "folder" && hasDescendant(n.children, id)) return true;
-          }
-          return false;
-        };
-        if (hasDescendant((drag as FolderNode).children, targetId)) return ws;
+      // Never drop a folder into its own descendant — checked against every dragged node.
+      const hasDescendant = (nodes: TreeNode[], id: string): boolean => {
+        for (const n of nodes) {
+          if (n.id === id) return true;
+          if (n.kind === "folder" && hasDescendant(n.children, id)) return true;
+        }
+        return false;
+      };
+      for (const id of idSet) {
+        const drag = findNode(ws.tree, id);
+        if (drag?.kind === "folder" && hasDescendant((drag as FolderNode).children, targetId)) return ws;
       }
 
-      let removed: TreeNode | null = null;
+      // Collect dragged nodes in their original tree order (not selection-click order)
+      // so a multi-select drag preserves relative ordering at the destination.
+      const removed: TreeNode[] = [];
       const remove = (nodes: TreeNode[]): TreeNode[] => {
         const out: TreeNode[] = [];
         for (const n of nodes) {
-          if (n.id === nodeId) { removed = n; continue; }
+          if (idSet.has(n.id)) { removed.push(n); continue; }
           out.push(n.kind === "folder" ? { ...n, children: remove(n.children) } : n);
         }
         return out;
       };
       let tree = remove(ws.tree);
-      if (!removed) return ws;
+      if (removed.length === 0) return ws;
 
       if (position === "inside") {
         const insert = (nodes: TreeNode[]): TreeNode[] =>
           nodes.map(n => n.id === targetId && n.kind === "folder"
-            ? { ...n, children: [...n.children, removed!], collapsed: false }
+            ? { ...n, children: [...n.children, ...removed], collapsed: false }
             : n.kind === "folder" ? { ...n, children: insert(n.children) } : n);
         return { ...ws, tree: insert(tree) };
       }
@@ -495,8 +499,9 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         const out: TreeNode[] = [];
         for (const n of nodes) {
           if (n.id === targetId) {
-            if (position === "before") { out.push(removed!); out.push(n); }
-            else { out.push(n); out.push(removed!); }
+            if (position === "before") out.push(...removed);
+            out.push(n.kind === "folder" ? { ...n, children: insertAdj(n.children) } : n);
+            if (position === "after") out.push(...removed);
           } else {
             out.push(n.kind === "folder" ? { ...n, children: insertAdj(n.children) } : n);
           }
@@ -508,27 +513,36 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const importCollection = useCallback(async () => {
-    const path = await pickJsonFile();
+    const path = await pickCollectionFile();
     if (!path) return;
     const raw = await readFileAtPath(path);
-    const data = JSON.parse(raw);
+    const data = parseCollectionFile(raw);
     if (isPostmanCollection(data)) {
       const { tree } = postmanToTree(data);
       setWorkspace((ws) => ({ ...ws, tree: [...ws.tree, ...tree] }));
     } else if (isRelayWorkspace(data)) {
       setWorkspace((ws) => ({ ...ws, tree: [...ws.tree, ...data.tree] }));
+    } else if (isOpenApiSpec(data)) {
+      const { tree, variables } = parseOpenApiSpec(data);
+      setWorkspace((ws) => {
+        const existingKeys = new Set(ws.variables.map((v) => v.key));
+        const newVars = variables.filter((v) => !existingKeys.has(v.key));
+        return { ...ws, tree: [...ws.tree, ...tree], variables: [...ws.variables, ...newVars] };
+      });
     } else {
       throw new Error("Unrecognized format");
     }
   }, []);
 
   const exportCollection = useCallback(async (): Promise<{ skippedGrpcCount: number } | null> => {
-    const path = await pickSavePath("collection.json");
+    const name = workspace.name?.trim() || "Relay Collection";
+    const fileSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "collection";
+    const path = await pickSavePath(`${fileSlug}.relay_collection.json`);
     if (!path) return null;
-    const { collection, skippedGrpcCount } = treeToPostman(workspace.tree, "Relay Collection");
+    const { collection, skippedGrpcCount } = treeToPostman(workspace.tree, name);
     await writeFileAtPath(path, JSON.stringify(collection, null, 2));
     return { skippedGrpcCount };
-  }, [workspace.tree]);
+  }, [workspace.tree, workspace.name]);
 
   const sendTab = useCallback(
     async (id: string) => {
@@ -676,10 +690,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setEnvironmentVariables,
       importCollection,
       exportCollection,
-      moveNode,
+      moveNodes,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, tabs, activeTabId, addFolder, addRequest, addGrpcRequest, renameNode, deleteNode, toggleCollapse, openTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, exportCollection, moveNode, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, tabs, activeTabId, addFolder, addRequest, addGrpcRequest, renameNode, deleteNode, toggleCollapse, openTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, exportCollection, moveNodes, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

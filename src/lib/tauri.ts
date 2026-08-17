@@ -11,11 +11,18 @@ export interface NativeHttpResponse {
   body: string;
 }
 
+export interface NativeFormDataField {
+  key: string;
+  value: string;
+  is_file: boolean;
+}
+
 export interface NativeHttpRequest {
   method: string;
   url: string;
   headers: [string, string][];
   body?: string;
+  form_data?: NativeFormDataField[];
 }
 
 // Runs the actual network call in Rust (reqwest), so there's no browser CORS
@@ -81,8 +88,21 @@ export async function pickJsonFile(): Promise<string | null> {
   return result as string | null;
 }
 
+export async function pickCollectionFile(): Promise<string | null> {
+  const result = await open({
+    filters: [{ name: "Collection / OpenAPI", extensions: ["json", "yaml", "yml"] }],
+    multiple: false,
+  });
+  return result as string | null;
+}
+
 export async function pickProtoFolder(): Promise<string | null> {
   const result = await open({ directory: true, multiple: false });
+  return result as string | null;
+}
+
+export async function pickAnyFile(): Promise<string | null> {
+  const result = await open({ multiple: false });
   return result as string | null;
 }
 
@@ -126,6 +146,15 @@ export function gitCommit(dir: string, message: string): Promise<void> {
 
 export function gitInit(dir: string): Promise<void> {
   return invoke("git_init", { dir });
+}
+
+export interface VersionStatus {
+  blocked: boolean;
+  message: string;
+}
+
+export function checkVersionStatus(): Promise<VersionStatus> {
+  return invoke("check_version_status");
 }
 
 // Local-only cache of each request's last response, keyed by workspace

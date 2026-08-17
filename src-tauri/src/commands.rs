@@ -1,5 +1,7 @@
 use crate::models::{HttpRequestPayload, HttpResponsePayload};
+use reqwest::multipart::{Form, Part};
 use reqwest::Method;
+use std::path::Path;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
@@ -19,7 +21,28 @@ pub async fn http_request(payload: HttpRequestPayload) -> Result<HttpResponsePay
     for (k, v) in &payload.headers {
         req = req.header(k, v);
     }
-    if let Some(body) = payload.body {
+
+    if let Some(fields) = payload.form_data {
+        let mut form = Form::new();
+        for field in fields {
+            if field.key.trim().is_empty() {
+                continue;
+            }
+            if field.is_file {
+                let bytes = tokio::fs::read(&field.value)
+                    .await
+                    .map_err(|e| format!("Failed to read file \"{}\": {}", field.value, e))?;
+                let file_name = Path::new(&field.value)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".to_string());
+                form = form.part(field.key, Part::bytes(bytes).file_name(file_name));
+            } else {
+                form = form.text(field.key, field.value);
+            }
+        }
+        req = req.multipart(form);
+    } else if let Some(body) = payload.body {
         req = req.body(body);
     }
 

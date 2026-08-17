@@ -80,18 +80,31 @@ interface DropInfo {
   position: "before" | "after" | "inside";
 }
 
+// Ids in the order they're actually rendered (children of a collapsed folder
+// are skipped) — used to resolve a shift-click range.
+function flattenVisible(nodes: TreeNode[]): string[] {
+  const out: string[] = [];
+  for (const n of nodes) {
+    out.push(n.id);
+    if (n.kind === "folder" && !n.collapsed) out.push(...flattenVisible(n.children));
+  }
+  return out;
+}
+
 let suppressNextClick = false;
 
-function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onDelete, dragId, dropInfo, onItemMouseDown }: {
+function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onDelete, draggingIds, dropInfo, selectedIds, onItemMouseDown, onItemClick }: {
   node: TreeNode;
   depth: number;
   onCtxMenu: (e: React.MouseEvent, node: TreeNode) => void;
   triggerEditId: string | null;
   clearTriggerEdit: () => void;
   onDelete: (id: string) => void;
-  dragId: string | null;
+  draggingIds: Set<string> | null;
   dropInfo: DropInfo | null;
+  selectedIds: Set<string>;
   onItemMouseDown: (nodeId: string, e: React.MouseEvent) => void;
+  onItemClick: (nodeId: string, e: React.MouseEvent) => boolean;
 }) {
   const { addFolder, addRequest, addGrpcRequest, renameNode, toggleCollapse, openTab, activeTabId, tabs } = useWorkspace();
   const [editing, setEditing] = useState(false);
@@ -112,13 +125,15 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
     else setEditVal(node.name);
   };
 
-  const isDragging = dragId === node.id;
+  const isDragging = draggingIds?.has(node.id) ?? false;
+  const isSelected = selectedIds.has(node.id);
   const isDropTarget = dropInfo?.id === node.id;
   const dropPos = isDropTarget ? dropInfo!.position : null;
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("button, input")) return;
     if (e.button !== 0) return;
+    if (e.shiftKey) e.preventDefault(); // stop the browser's native shift-click text-range selection
     onItemMouseDown(node.id, e);
   };
 
@@ -129,10 +144,10 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
           data-tree-id={node.id}
           data-tree-kind="folder"
           onMouseDown={handleMouseDown}
-          className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] transition-colors ${
+          className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] transition-colors select-none ${
             isDragging ? "opacity-30" : "opacity-100"
           } ${
-            dropPos === "inside" ? "bg-th-accent-bg ring-1 ring-th-accent-border" : "hover:bg-th-hover"
+            dropPos === "inside" ? "bg-th-accent-bg ring-1 ring-th-accent-border" : isSelected ? "bg-th-accent-bg" : "hover:bg-th-hover"
           } ${
             dropPos === "before" ? "border-t-2 border-th-accent" : ""
           } ${
@@ -141,7 +156,7 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
           style={{ paddingLeft: 8 + depth * 14 }}
           onMouseEnter={() => setHover(true)}
           onMouseLeave={() => setHover(false)}
-          onClick={() => { if (suppressNextClick) return; toggleCollapse(node.id); }}
+          onClick={(e) => { if (suppressNextClick) return; if (!onItemClick(node.id, e)) return; toggleCollapse(node.id); }}
           onContextMenu={(e) => onCtxMenu(e, node)}
         >
           <FolderIcon open={!node.collapsed} />
@@ -196,7 +211,7 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
               </div>
             )}
             {node.children.map((c) => (
-              <TreeItem key={c.id} node={c} depth={depth + 1} onCtxMenu={onCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={clearTriggerEdit} onDelete={onDelete} dragId={dragId} dropInfo={dropInfo} onItemMouseDown={onItemMouseDown} />
+              <TreeItem key={c.id} node={c} depth={depth + 1} onCtxMenu={onCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={clearTriggerEdit} onDelete={onDelete} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={onItemMouseDown} onItemClick={onItemClick} />
             ))}
           </div>
         )}
@@ -214,10 +229,10 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
         data-tree-id={node.id}
         data-tree-kind="grpc"
         onMouseDown={handleMouseDown}
-        className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] ${
+        className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] select-none ${
           isDragging ? "opacity-30" : "opacity-100"
         } ${
-          isActive && !isDropTarget ? "bg-th-accent-bg" : !isDropTarget ? "hover:bg-th-hover" : ""
+          isSelected || (isActive && !isDropTarget) ? "bg-th-accent-bg" : !isDropTarget ? "hover:bg-th-hover" : ""
         } ${
           dropPos === "before" ? "border-t-2 border-th-accent" : ""
         } ${
@@ -226,7 +241,7 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
         style={{ paddingLeft: 8 + depth * 14 }}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
-        onClick={() => { if (suppressNextClick) return; openTab(node.id); }}
+        onClick={(e) => { if (suppressNextClick) return; if (!onItemClick(node.id, e)) return; openTab(node.id); }}
         onContextMenu={(e) => onCtxMenu(e, node)}
       >
         <span className="font-mono text-[9.5px] font-bold w-9 shrink-0 text-th-accent-text">gRPC</span>
@@ -270,10 +285,10 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
       data-tree-id={node.id}
       data-tree-kind="request"
       onMouseDown={handleMouseDown}
-      className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] ${
+      className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] select-none ${
         isDragging ? "opacity-30" : "opacity-100"
       } ${
-        isActive && !isDropTarget ? "bg-th-accent-bg" : !isDropTarget ? "hover:bg-th-hover" : ""
+        isSelected || (isActive && !isDropTarget) ? "bg-th-accent-bg" : !isDropTarget ? "hover:bg-th-hover" : ""
       } ${
         dropPos === "before" ? "border-t-2 border-th-accent" : ""
       } ${
@@ -282,7 +297,7 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
       style={{ paddingLeft: 8 + depth * 14 }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onClick={() => { if (suppressNextClick) return; openTab(node.id); }}
+      onClick={(e) => { if (suppressNextClick) return; if (!onItemClick(node.id, e)) return; openTab(node.id); }}
       onContextMenu={(e) => onCtxMenu(e, node)}
     >
       <span className={`font-mono text-[10.5px] font-bold w-9 shrink-0 ${METHOD_COLOR[node.request.method]}`}>{node.request.method}</span>
@@ -326,7 +341,7 @@ const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 260;
 
 export default function Sidebar() {
-  const { workspace, addFolder, addRequest, addGrpcRequest, deleteNode, moveNode, renameWorkspace } = useWorkspace();
+  const { workspace, addFolder, addRequest, addGrpcRequest, deleteNode, moveNodes, renameWorkspace } = useWorkspace();
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [triggerEditId, setTriggerEditId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -334,6 +349,8 @@ export default function Sidebar() {
   const [titleDraft, setTitleDraft] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropInfo, setDropInfo] = useState<DropInfo | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem("relay-sidebar-width"));
     return saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX ? saved : SIDEBAR_DEFAULT;
@@ -362,11 +379,17 @@ export default function Sidebar() {
     };
   }, [resizing]);
 
+  const [dragCursor, setDragCursor] = useState<{ x: number; y: number } | null>(null);
   const dragStartRef = useRef<{ nodeId: string; y: number } | null>(null);
   const dragIdRef = useRef<string | null>(null);
   const dropInfoRef = useRef<DropInfo | null>(null);
+  const selectedIdsRef = useRef<Set<string>>(selectedIds);
   dragIdRef.current = dragId;
   dropInfoRef.current = dropInfo;
+  selectedIdsRef.current = selectedIds;
+
+  // While dragging one of an active multi-selection, the whole selection moves together.
+  const draggingIds = dragId ? (selectedIds.has(dragId) && selectedIds.size > 1 ? selectedIds : new Set([dragId])) : null;
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -381,8 +404,15 @@ export default function Sidebar() {
         suppressNextClick = true;
       }
 
+      setDragCursor({ x: e.clientX, y: e.clientY });
+
+      const movingIds =
+        selectedIdsRef.current.has(start.nodeId) && selectedIdsRef.current.size > 1
+          ? selectedIdsRef.current
+          : new Set([start.nodeId]);
+
       const el = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-tree-id]") as HTMLElement | null;
-      if (!el || el.dataset.treeId === start.nodeId) {
+      if (!el || movingIds.has(el.dataset.treeId!)) {
         setDropInfo(null);
         dropInfoRef.current = null;
         return;
@@ -405,11 +435,13 @@ export default function Sidebar() {
       const did = dragIdRef.current;
       const di = dropInfoRef.current;
       if (dragStartRef.current && did && di) {
-        moveNode(did, di.id, di.position);
+        const movingIds = selectedIdsRef.current.has(did) && selectedIdsRef.current.size > 1 ? Array.from(selectedIdsRef.current) : [did];
+        moveNodes(movingIds, di.id, di.position);
       }
       dragStartRef.current = null;
       setDragId(null);
       setDropInfo(null);
+      setDragCursor(null);
       dragIdRef.current = null;
       dropInfoRef.current = null;
       setTimeout(() => { suppressNextClick = false; }, 0);
@@ -421,7 +453,7 @@ export default function Sidebar() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [moveNode]);
+  }, [moveNodes]);
 
   useEffect(() => {
     if (!ctxMenu) return;
@@ -433,7 +465,39 @@ export default function Sidebar() {
   }, [ctxMenu]);
 
   const handleItemMouseDown = (nodeId: string, e: React.MouseEvent) => {
+    if (e.metaKey || e.ctrlKey) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(nodeId)) next.delete(nodeId);
+        else next.add(nodeId);
+        return next;
+      });
+      setLastSelectedId(nodeId);
+      return;
+    }
+    if (e.shiftKey) {
+      const order = flattenVisible(workspace.tree);
+      const anchor = lastSelectedId ?? nodeId;
+      const ai = order.indexOf(anchor);
+      const bi = order.indexOf(nodeId);
+      setSelectedIds(ai === -1 || bi === -1 ? new Set([nodeId]) : new Set(order.slice(Math.min(ai, bi), Math.max(ai, bi) + 1)));
+      return;
+    }
+    // Plain mousedown on an already-multi-selected item keeps the group selected
+    // so the drag that may follow moves the whole selection together.
+    setSelectedIds((prev) => (prev.has(nodeId) && prev.size > 1 ? prev : new Set([nodeId])));
+    setLastSelectedId(nodeId);
     dragStartRef.current = { nodeId, y: e.clientY };
+  };
+
+  // Called from an item's onClick before its default action (open tab / toggle
+  // collapse). Modifier-clicks are selection-only — mousedown already handled
+  // them — so they return false and skip the default action.
+  const handleItemClick = (nodeId: string, e: React.MouseEvent): boolean => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey) return false;
+    setSelectedIds(new Set([nodeId]));
+    setLastSelectedId(nodeId);
+    return true;
   };
 
   const handleCtxMenu = (e: React.MouseEvent, node: TreeNode) => {
@@ -508,14 +572,26 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto py-2">
+      <div
+        className="flex-1 overflow-auto py-2"
+        onClick={(e) => { if (e.target === e.currentTarget) setSelectedIds(new Set()); }}
+      >
         {workspace.tree.length === 0 && <div className="px-3 text-[12px] text-th-text-4 font-mono">no collections yet</div>}
         {workspace.tree.map((n) => (
-          <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteId(id)} dragId={dragId} dropInfo={dropInfo} onItemMouseDown={handleItemMouseDown} />
+          <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteId(id)} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={handleItemMouseDown} onItemClick={handleItemClick} />
         ))}
       </div>
 
       <GitPanel />
+
+      {dragCursor && draggingIds && draggingIds.size > 1 && (
+        <div
+          className="fixed z-50 pointer-events-none bg-th-accent text-white text-[11px] font-mono font-medium rounded-full px-2 py-0.5 shadow-lg"
+          style={{ left: dragCursor.x + 14, top: dragCursor.y + 10 }}
+        >
+          {draggingIds.size} items
+        </div>
+      )}
 
       {ctxMenu && (
         <div

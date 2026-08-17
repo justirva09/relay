@@ -13,8 +13,11 @@ Collections are stored as **plain-text `.relay` files** (one file per request/fo
 - Multi-tab requests with unsaved-change indicator (`●`)
 - Params ⟷ URL two-way sync (Postman-style), auto-adds a new row as you type
 - **Path variables**: `:id`-style segments in the URL are auto-detected, highlighted, and get their own tab to fill in values
-- Headers, Body (none/json/text), **Prettify** button for JSON bodies
+- Body modes: none, JSON, raw text, `x-www-form-urlencoded`, and multipart form-data (including real file uploads picked from disk); **Prettify** button for JSON bodies
+- **Bulk Edit** for headers and params — switch to a raw `key: value` per line view, `//`-prefix a line to disable that row
 - Auto-generated headers (`User-Agent`, `Content-Type`, `Host`, `Content-Length`) shown read-only when not set manually; toggleable
+- **Drag & drop** to reorder requests/folders or move them into another folder — supports multi-select (⌘/Ctrl-click, Shift-click for a range) so a whole batch moves together; order is saved automatically
+- Import Postman Collections (v2.1) or OpenAPI 3.x specs (JSON/YAML); export back out to a Relay collection file
 - Default `User-Agent: Relay/x.y.z` sent unless overridden — keeps APIs that reject clientless requests (e.g. GitHub REST API) working out of the box
 - Pre-request & test scripts with a mini `pm` API, including autocomplete:
   - `pm.environment.get/set/unset`, `pm.variables.get/set`
@@ -48,9 +51,9 @@ Collections are stored as **plain-text `.relay` files** (one file per request/fo
 
 ## Roadmap
 - Streaming gRPC (server-stream/client-stream/bidi) — only unary is implemented so far
-- Drag & drop reorder for folders/requests
 - Auth tab (Bearer/Basic/OAuth) — for now, use Headers or a pre-request script
-- Import/export collections (Postman/OpenAPI)
+- Relay CLI for running collections in CI/CD
+- Docs viewer & local mock server
 
 ## Development
 

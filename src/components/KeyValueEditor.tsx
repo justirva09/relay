@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { KVRow, newRow } from "../types";
+import { KVRow, newRow, uid } from "../types";
 import { useVariableMenu } from "../lib/useVariableMenu";
 import VariableMenuList from "./VariableMenuList";
 import { highlightUrlTokens } from "../lib/urlHighlight";
@@ -86,7 +86,32 @@ export function ValueInput({ value, onChange, placeholder, variables }: {
   );
 }
 
+function serializeBulk(rows: KVRow[]): string {
+  return rows
+    .filter((r) => r.key.trim() || r.value.trim())
+    .map((r) => `${r.enabled ? "" : "// "}${r.key}: ${r.value}`)
+    .join("\n");
+}
+
+function parseBulk(text: string): KVRow[] {
+  const rows: KVRow[] = [];
+  for (const rawLine of text.split("\n")) {
+    if (!rawLine.trim()) continue;
+    const disabled = /^\s*\/\/\s?/.test(rawLine);
+    const line = rawLine.replace(/^\s*\/\/\s?/, "");
+    const idx = line.indexOf(":");
+    const key = (idx === -1 ? line : line.slice(0, idx)).trim();
+    const value = idx === -1 ? "" : line.slice(idx + 1).trim();
+    if (!key && !value) continue;
+    rows.push({ id: uid(), key, value, enabled: !disabled });
+  }
+  return rows.length ? rows : [newRow()];
+}
+
 export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, placeholderVal, showToggle = true, variables }: Props) {
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+
   const commit = (rowsIn: KVRow[]) => {
     let out = rowsIn;
     const last = out[out.length - 1];
@@ -112,40 +137,70 @@ export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, pla
     onChangeRows(filtered);
   };
 
+  const enterBulkMode = () => {
+    setBulkText(serializeBulk(rows));
+    setBulkMode(true);
+  };
+
+  const exitBulkMode = () => {
+    commit(parseBulk(bulkText));
+    setBulkMode(false);
+  };
+
   return (
     <div className="flex flex-col gap-1.5">
-      {rows.map((r) => (
-        <div key={r.id} className="flex items-center gap-2">
-          {showToggle && (
-            <input
-              type="checkbox"
-              checked={r.enabled}
-              onChange={(e) => update(r.id, "enabled", e.target.checked)}
-              className="h-3.5 w-3.5 accent-[var(--c-accent)] shrink-0"
-            />
-          )}
-          <input
-            value={r.key}
-            onChange={(e) => update(r.id, "key", e.target.value)}
-            placeholder={placeholderKey}
-            className="flex-1 min-w-0 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
-          />
-          <ValueInput
-            value={r.value}
-            onChange={(v) => update(r.id, "value", v)}
-            placeholder={placeholderVal}
-            variables={variables}
-          />
-          <button
-            onClick={() => remove(r.id)}
-            className="shrink-0 h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-rose-400 hover:bg-rose-400/10 transition-colors"
-            aria-label="Remove row"
-          >
-            ×
-          </button>
-        </div>
-      ))}
-      <span className="text-[11px] text-th-text-4 font-mono">start typing to add a row</span>
+      <div className="flex justify-end">
+        <button
+          onClick={() => (bulkMode ? exitBulkMode() : enterBulkMode())}
+          className="px-2 py-0.5 rounded text-[11px] font-mono text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
+        >
+          {bulkMode ? "Key-Value Edit" : "Bulk Edit"}
+        </button>
+      </div>
+      {bulkMode ? (
+        <textarea
+          value={bulkText}
+          onChange={(e) => setBulkText(e.target.value)}
+          placeholder={`${placeholderKey}: ${placeholderVal}\n// disabled-row: value`}
+          rows={Math.max(4, rows.length)}
+          className="w-full resize-y bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
+        />
+      ) : (
+        <>
+          {rows.map((r) => (
+            <div key={r.id} className="flex items-center gap-2">
+              {showToggle && (
+                <input
+                  type="checkbox"
+                  checked={r.enabled}
+                  onChange={(e) => update(r.id, "enabled", e.target.checked)}
+                  className="h-3.5 w-3.5 accent-[var(--c-accent)] shrink-0"
+                />
+              )}
+              <input
+                value={r.key}
+                onChange={(e) => update(r.id, "key", e.target.value)}
+                placeholder={placeholderKey}
+                className="flex-1 min-w-0 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
+              />
+              <ValueInput
+                value={r.value}
+                onChange={(v) => update(r.id, "value", v)}
+                placeholder={placeholderVal}
+                variables={variables}
+              />
+              <button
+                onClick={() => remove(r.id)}
+                className="shrink-0 h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-rose-400 hover:bg-rose-400/10 transition-colors"
+                aria-label="Remove row"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <span className="text-[11px] text-th-text-4 font-mono">start typing to add a row</span>
+        </>
+      )}
     </div>
   );
 }
