@@ -5,6 +5,7 @@ import { listGrpcServices, listGrpcServicesFromProto, listProtoServiceFiles, fet
 import CodeEditor from "./CodeEditor";
 import KeyValueEditor from "./KeyValueEditor";
 import GrpcServicePicker from "./GrpcServicePicker";
+import FloatingMenu from "./FloatingMenu";
 
 function indent(text: string): string {
   return text
@@ -34,11 +35,15 @@ function GrpcMethodDropdown({ url, protoSource, protoFiles, activeProtoFile, ser
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (ref.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
@@ -100,36 +105,39 @@ function GrpcMethodDropdown({ url, protoSource, protoFiles, activeProtoFile, ser
           <path d="M2 4l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {open && (
-        <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-th-elevated border border-th-border rounded-md shadow-xl p-2 min-w-[420px] max-h-[420px] overflow-y-auto">
-          <div className="flex items-center justify-between gap-2 px-1 pb-2 mb-1 border-b border-th-border">
-            <span className="text-[11px] font-mono text-th-text-3">
-              {loading
-                ? protoSource === "reflection" ? "reflecting…" : "parsing…"
-                : error
-                ? "failed to list services"
-                : `${services.length} service${services.length === 1 ? "" : "s"} found`}
-            </span>
-            <button
-              onClick={reflect}
-              disabled={loading}
-              className="px-2 py-0.5 rounded text-[11px] font-mono text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg disabled:opacity-50"
-            >
-              {loading ? "…" : protoSource === "reflection" ? "↻ reflect" : "↻ reparse"}
-            </button>
-          </div>
-          {error && <p className="text-[11.5px] font-mono text-rose-400 px-1 pb-2 leading-relaxed">{error}</p>}
-          <GrpcServicePicker
-            services={services}
-            selectedService={service}
-            selectedMethod={method}
-            onSelect={(s, m, t) => {
-              onSelect(s, m, t);
-              setOpen(false);
-            }}
-          />
+      <FloatingMenu
+        ref={menuRef}
+        anchorRef={ref}
+        open={open}
+        className="bg-th-elevated border border-th-border rounded-md shadow-xl p-2 min-w-[420px] max-h-[420px] overflow-y-auto"
+      >
+        <div className="flex items-center justify-between gap-2 px-1 pb-2 mb-1 border-b border-th-border">
+          <span className="text-[11px] font-mono text-th-text-3">
+            {loading
+              ? protoSource === "reflection" ? "reflecting…" : "parsing…"
+              : error
+              ? "failed to list services"
+              : `${services.length} service${services.length === 1 ? "" : "s"} found`}
+          </span>
+          <button
+            onClick={reflect}
+            disabled={loading}
+            className="px-2 py-0.5 rounded text-[11px] font-mono text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg disabled:opacity-50"
+          >
+            {loading ? "…" : protoSource === "reflection" ? "↻ reflect" : "↻ reparse"}
+          </button>
         </div>
-      )}
+        {error && <p className="text-[11.5px] font-mono text-rose-400 px-1 pb-2 leading-relaxed">{error}</p>}
+        <GrpcServicePicker
+          services={services}
+          selectedService={service}
+          selectedMethod={method}
+          onSelect={(s, m, t) => {
+            onSelect(s, m, t);
+            setOpen(false);
+          }}
+        />
+      </FloatingMenu>
     </div>
   );
 }
@@ -143,11 +151,15 @@ function ActiveProtoFilePicker({ files, active, onSelect, onRemove }: {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (ref.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
@@ -179,58 +191,61 @@ function ActiveProtoFilePicker({ files, active, onSelect, onRemove }: {
           <path d="M2 4l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {open && (
-        <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-th-elevated border border-th-border rounded-md shadow-xl p-2 max-h-[420px] overflow-y-auto flex flex-col gap-1.5">
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="search spec file"
-            className="bg-th-bg border border-th-border-input rounded-md px-3 py-1.5 text-[12.5px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
-          />
-          <div className="flex flex-col gap-3">
-            {Array.from(groups.entries()).map(([groupKey, groupFiles]) => (
-              <div key={groupKey}>
-                <div className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mb-1">
-                  {groupKey.split("/").join(".")}
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  {groupFiles.map((f) => {
-                    const isActive = active === f.name;
-                    const rest = f.name.slice(groupKey.length + 1) || f.name;
-                    return (
-                      <div
-                        key={f.name}
-                        className={`flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 ${
-                          isActive ? "bg-th-accent-bg text-th-accent-text" : "text-th-text-1 hover:bg-th-hover"
-                        }`}
-                      >
-                        <button
-                          onClick={() => {
-                            onSelect(f.name);
-                            setOpen(false);
-                          }}
-                          className="flex-1 min-w-0 text-left text-[12.5px] font-mono truncate"
-                          title={f.name}
-                        >
-                          {rest}
-                        </button>
-                        <button
-                          onClick={() => onRemove(f.name)}
-                          className="h-5 w-5 grid place-items-center rounded text-th-text-4 hover:text-rose-400 hover:bg-rose-400/10 shrink-0"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
+      <FloatingMenu
+        ref={menuRef}
+        anchorRef={ref}
+        open={open}
+        className="bg-th-elevated border border-th-border rounded-md shadow-xl p-2 max-h-[420px] overflow-y-auto flex flex-col gap-1.5"
+      >
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="search spec file"
+          className="bg-th-bg border border-th-border-input rounded-md px-3 py-1.5 text-[12.5px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
+        />
+        <div className="flex flex-col gap-3">
+          {Array.from(groups.entries()).map(([groupKey, groupFiles]) => (
+            <div key={groupKey}>
+              <div className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mb-1">
+                {groupKey.split("/").join(".")}
               </div>
-            ))}
-            {filtered.length === 0 && <span className="text-[12px] text-th-text-4 font-mono px-1">no matches</span>}
-          </div>
+              <div className="flex flex-col gap-0.5">
+                {groupFiles.map((f) => {
+                  const isActive = active === f.name;
+                  const rest = f.name.slice(groupKey.length + 1) || f.name;
+                  return (
+                    <div
+                      key={f.name}
+                      className={`flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 ${
+                        isActive ? "bg-th-accent-bg text-th-accent-text" : "text-th-text-1 hover:bg-th-hover"
+                      }`}
+                    >
+                      <button
+                        onClick={() => {
+                          onSelect(f.name);
+                          setOpen(false);
+                        }}
+                        className="flex-1 min-w-0 text-left text-[12.5px] font-mono truncate"
+                        title={f.name}
+                      >
+                        {rest}
+                      </button>
+                      <button
+                        onClick={() => onRemove(f.name)}
+                        className="h-5 w-5 grid place-items-center rounded text-th-text-4 hover:text-rose-400 hover:bg-rose-400/10 shrink-0"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {filtered.length === 0 && <span className="text-[12px] text-th-text-4 font-mono px-1">no matches</span>}
         </div>
-      )}
+      </FloatingMenu>
     </div>
   );
 }

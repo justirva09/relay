@@ -69,7 +69,14 @@ export default function TabBar() {
             }`}
           >
             {tab.kind === "grpc" ? (
-              <span className="font-mono text-[10.5px] font-bold text-th-accent-text">gRPC</span>
+              <span
+                title={tab.draft.protoSource === "reflection" ? "Server reflection" : undefined}
+                className={`font-mono text-[10.5px] font-bold ${
+                  tab.draft.protoSource === "reflection" ? "text-rose-400" : "text-th-accent-text"
+                }`}
+              >
+                gRPC
+              </span>
             ) : (
               <span className={`font-mono text-[10.5px] font-bold ${METHOD_COLOR[tab.draft.method]}`}>{tab.draft.method}</span>
             )}

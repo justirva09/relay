@@ -2,11 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import { FormDataRow, newFormDataRow } from "../types";
 import { ValueInput } from "./KeyValueEditor";
 import { pickAnyFile } from "../lib/tauri";
+import { VariableGroup } from "../lib/useVariableMenu";
 
 interface Props {
   rows: FormDataRow[];
   onChangeRows: (rows: FormDataRow[]) => void;
-  variables?: string[];
+  variables?: VariableGroup[];
 }
 
 function basename(path: string): string {

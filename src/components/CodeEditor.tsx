@@ -2,6 +2,7 @@ import React, { useRef, useCallback, useEffect, useMemo, useState } from "react"
 import { highlightJS, highlightJSON, isJsonLike, escapeHtml } from "../lib/highlight";
 import { CompletionItem, ASSERTION_ROOT } from "../lib/pmCompletions";
 import { ProtoFieldSchema } from "../lib/grpcClient";
+import { VariableGroup } from "../lib/useVariableMenu";
 
 interface Props {
   value: string;
@@ -9,7 +10,7 @@ interface Props {
   placeholder?: string;
   className?: string;
   completions?: CompletionItem[];
-  variables?: string[];
+  variables?: VariableGroup[];
   protoFields?: ProtoFieldSchema[];
 }
 
@@ -221,9 +222,13 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
       if (variables && variables.length) {
         const v = unclosedVarAt(val, pos);
         if (v) {
-          const items = variables
-            .filter((name) => name.toLowerCase().startsWith(v.partial.toLowerCase()))
-            .map((name) => ({ label: name, detail: "variable" }));
+          const partial = v.partial.toLowerCase();
+          const items: Suggestion[] = [];
+          for (const g of variables) {
+            for (const name of g.names) {
+              if (name.toLowerCase().startsWith(partial)) items.push({ label: name, detail: g.category });
+            }
+          }
           if (items.length) {
             setMenu(buildMenu(val, "variable", items, v.replaceFrom, pos));
             return;

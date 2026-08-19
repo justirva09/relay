@@ -4,6 +4,8 @@ import { loadWorkspaceFile, pickCollectionFile, pickSavePath, readFileAtPath, wr
 import { runRequest } from "./lib/useSendRequest";
 import { isPostmanCollection, isRelayWorkspace, postmanToTree, treeToPostman } from "./lib/postman";
 import { isOpenApiSpec, parseOpenApiSpec, parseCollectionFile } from "./lib/openapi";
+import { mergeIncomingTree, findFolderPath } from "./lib/mergeImport";
+import { filterTreeBySelection } from "./lib/treeFilter";
 import { simulateGrpcCall } from "./lib/grpcMock";
 import { invokeGrpcUnary } from "./lib/grpcClient";
 
@@ -56,9 +58,24 @@ interface Ctx {
   setActiveEnvironment: (id: string | null) => void;
   setEnvironmentVariables: (envId: string, rows: KVRow[]) => void;
   importCollection: () => Promise<void>;
-  exportCollection: () => Promise<{ skippedGrpcCount: number } | null>;
+  importIntoFolder: (folderId: string) => Promise<void>;
+  pendingImport: { tree: TreeNode[]; variables: KVRow[]; targetFolderId?: string } | null;
+  confirmImport: (selectedIds: Set<string>) => { added: number; updated: number };
+  cancelImport: () => void;
+  importError: string | null;
+  dismissImportError: () => void;
+  exportCollection: () => void;
+  pendingExport: boolean;
+  confirmExport: (selectedIds: Set<string>) => Promise<{ skippedGrpcCount: number } | null>;
+  cancelExport: () => void;
+  compareOpen: boolean;
+  openCompare: () => void;
+  closeCompare: () => void;
+  pauseAutosave: () => void;
+  resumeAutosave: () => void;
   moveNodes: (nodeIds: string[], targetId: string, position: "before" | "after" | "inside") => void;
   addGrpcRequest: (parentId: string | null) => string;
+  duplicateNode: (id: string) => string | null;
   updateGrpcDraft: (id: string, patch: Partial<GrpcRequestData>) => void;
   sendGrpcTab: (id: string) => Promise<void>;
   setProtoLibrary: (files: { name: string; content: string }[]) => void;
@@ -105,6 +122,13 @@ export function findParentFolderId(nodes: TreeNode[], childId: string, parentId:
   return null;
 }
 
+function cloneWithFreshIds(node: TreeNode): TreeNode {
+  if (node.kind === "folder") {
+    return { ...node, id: uid(), children: node.children.map(cloneWithFreshIds) };
+  }
+  return { ...node, id: uid() };
+}
+
 function insertAt(nodes: TreeNode[], parentId: string | null, node: TreeNode): TreeNode[] {
   if (parentId === null) return [...nodes, node];
   return nodes.map((n) => {
@@ -147,11 +171,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [openTick, setOpenTick] = useState(0);
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
+  const [pendingImport, setPendingImport] = useState<{ tree: TreeNode[]; variables: KVRow[]; targetFolderId?: string } | null>(null);
+  const [pendingExport, setPendingExport] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const [responseCacheEnabled, setResponseCacheEnabledState] = useState(() => localStorage.getItem(RESPONSE_CACHE_SETTING_KEY) !== "false");
   const [mockServerPort, setMockServerPort] = useState<number>(() => Number(localStorage.getItem(MOCK_SERVER_PORT_KEY)) || 4010);
   const [mockServerRunningPort, setMockServerRunningPort] = useState<number | null>(null);
   const [mockServerError, setMockServerError] = useState<string | null>(null);
   const loaded = useRef(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSaveArgsRef = useRef<{ dir: string; data: string; hidden: boolean } | null>(null);
+  const autosavePausedRef = useRef(false);
   const grpcCancelRefs = useRef<Map<string, { current: boolean }>>(new Map());
   const responseCacheRef = useRef<Record<string, CachedResponse>>({});
 
@@ -226,10 +257,54 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
+  // save_workspace_dir rewrites the entire .relay directory from scratch
+  // (deletes every file, re-serializes every request/folder/environment) —
+  // debounced so rapid typing coalesces into one write instead of a full
+  // directory rewrite per keystroke.
   useEffect(() => {
     if (!loaded.current || !workspaceDir) return;
-    saveWorkspaceDir(workspaceDir, JSON.stringify(workspace), workspaceHidden).catch(() => {});
+    pendingSaveArgsRef.current = { dir: workspaceDir, data: JSON.stringify(workspace), hidden: workspaceHidden };
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null;
+      // Skip while paused (see pauseAutosave) — a stage/commit flow writes
+      // specific files directly to disk outside React state; if this timer
+      // fires mid-sequence, its full-tree rewrite (from the in-memory draft)
+      // would silently clobber a carefully-merged partial-field file before
+      // `git add` ever reads it, dragging unselected field changes into the
+      // commit. pendingSaveArgsRef keeps the latest args for resumeAutosave
+      // to flush once it's safe.
+      if (autosavePausedRef.current) return;
+      const args = pendingSaveArgsRef.current;
+      if (args) saveWorkspaceDir(args.dir, args.data, args.hidden).catch(() => {});
+    }, 500);
   }, [workspace, workspaceDir, workspaceHidden]);
+
+  // Flush a still-pending debounced save immediately on unmount (e.g. app
+  // quitting right after typing) so the last edits aren't dropped.
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        const args = pendingSaveArgsRef.current;
+        if (args) saveWorkspaceDir(args.dir, args.data, args.hidden).catch(() => {});
+      }
+    };
+  }, []);
+
+  const pauseAutosave = useCallback(() => {
+    autosavePausedRef.current = true;
+  }, []);
+
+  // Flushes the latest in-memory draft to disk (harmless/idempotent — by
+  // this point any direct file writes from a paused operation are done, so
+  // this just re-syncs everything to what React already believes is true)
+  // before letting the debounced autosave resume normal operation.
+  const resumeAutosave = useCallback(() => {
+    autosavePausedRef.current = false;
+    const args = pendingSaveArgsRef.current;
+    if (args) saveWorkspaceDir(args.dir, args.data, args.hidden).catch(() => {});
+  }, []);
 
   // Strictly for opening a workspace that already exists — kept separate
   // from createWorkspace so the two actions read as distinct in the UI
@@ -323,6 +398,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       tree: mapTree(ws.tree, id, (n) => ({ ...n, name }) as TreeNode),
     }));
   }, []);
+
+  const duplicateNode = useCallback(
+    (id: string): string | null => {
+      const original = findNode(workspace.tree, id);
+      if (!original) return null;
+      const parentId = findParentFolderId(workspace.tree, id);
+      const clone = { ...cloneWithFreshIds(original), name: `${original.name} copy` };
+      setWorkspace((ws) => ({ ...ws, tree: insertAt(ws.tree, parentId, clone) }));
+      return clone.id;
+    },
+    [workspace.tree]
+  );
 
   const deleteNode = useCallback((id: string) => {
     setWorkspace((ws) => ({ ...ws, tree: mapTree(ws.tree, id, () => null) }));
@@ -588,37 +675,121 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const importCollection = useCallback(async () => {
+  const parseImportSource = useCallback(async (): Promise<{ tree: TreeNode[]; variables: KVRow[] } | null> => {
     const path = await pickCollectionFile();
-    if (!path) return;
+    if (!path) return null;
     const raw = await readFileAtPath(path);
     const data = parseCollectionFile(raw);
     if (isPostmanCollection(data)) {
       const { tree } = postmanToTree(data);
-      setWorkspace((ws) => ({ ...ws, tree: [...ws.tree, ...tree] }));
+      return { tree, variables: [] };
     } else if (isRelayWorkspace(data)) {
-      setWorkspace((ws) => ({ ...ws, tree: [...ws.tree, ...data.tree] }));
+      return { tree: data.tree, variables: [] };
     } else if (isOpenApiSpec(data)) {
       const { tree, variables } = parseOpenApiSpec(data);
-      setWorkspace((ws) => {
-        const existingKeys = new Set(ws.variables.map((v) => v.key));
-        const newVars = variables.filter((v) => !existingKeys.has(v.key));
-        return { ...ws, tree: [...ws.tree, ...tree], variables: [...ws.variables, ...newVars] };
-      });
-    } else {
-      throw new Error("Unrecognized format");
+      return { tree, variables };
     }
+    throw new Error("Unrecognized format");
   }, []);
 
-  const exportCollection = useCallback(async (): Promise<{ skippedGrpcCount: number } | null> => {
-    const name = workspace.name?.trim() || "Relay Collection";
-    const fileSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "collection";
-    const path = await pickSavePath(`${fileSlug}.relay_collection.json`);
-    if (!path) return null;
-    const { collection, skippedGrpcCount } = treeToPostman(workspace.tree, name);
-    await writeFileAtPath(path, JSON.stringify(collection, null, 2));
-    return { skippedGrpcCount };
-  }, [workspace.tree, workspace.name]);
+  const importCollection = useCallback(async () => {
+    try {
+      const result = await parseImportSource();
+      if (result) setPendingImport(result);
+    } catch (e: any) {
+      setImportError(e.message || String(e));
+    }
+  }, [parseImportSource]);
+
+  // Same file picker + parse, but new (unmatched) requests land inside this
+  // specific folder instead of mirroring the incoming spec's own grouping.
+  const importIntoFolder = useCallback(
+    async (folderId: string) => {
+      try {
+        const result = await parseImportSource();
+        if (result) setPendingImport({ ...result, targetFolderId: folderId });
+      } catch (e: any) {
+        setImportError(e.message || String(e));
+      }
+    },
+    [parseImportSource]
+  );
+
+  const cancelImport = useCallback(() => setPendingImport(null), []);
+  const dismissImportError = useCallback(() => setImportError(null), []);
+
+  // Merges only the requests the user checked in the picker into the
+  // existing workspace tree (matched by method+URL, see mergeImport.ts) —
+  // re-importing the same spec updates in place instead of duplicating.
+  const confirmImport = useCallback(
+    (selectedIds: Set<string>): { added: number; updated: number } => {
+      if (!pendingImport) return { added: 0, updated: 0 };
+      const selectedTree = filterTreeBySelection(pendingImport.tree, selectedIds);
+      const basePath = pendingImport.targetFolderId ? findFolderPath(workspace.tree, pendingImport.targetFolderId) || [] : [];
+      const merged = mergeIncomingTree(workspace.tree, selectedTree, basePath);
+      const existingKeys = new Set(workspace.variables.map((v) => v.key));
+      const newVars = pendingImport.variables.filter((v) => !existingKeys.has(v.key));
+      setWorkspace((ws) => ({ ...ws, tree: merged.tree, variables: [...ws.variables, ...newVars] }));
+      setPendingImport(null);
+      return { added: merged.added, updated: merged.updated };
+    },
+    [pendingImport, workspace.tree, workspace.variables]
+  );
+
+  const exportCollection = useCallback(() => setPendingExport(true), []);
+
+  const cancelExport = useCallback(() => setPendingExport(false), []);
+
+  const openCompare = useCallback(() => setCompareOpen(true), []);
+  const closeCompare = useCallback(() => setCompareOpen(false), []);
+
+  const confirmExport = useCallback(
+    async (selectedIds: Set<string>): Promise<{ skippedGrpcCount: number } | null> => {
+      const selectedTree = filterTreeBySelection(workspace.tree, selectedIds);
+      const name = workspace.name?.trim() || "Relay Collection";
+      const fileSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "collection";
+      const path = await pickSavePath(`${fileSlug}.relay_collection.json`);
+      setPendingExport(false);
+      if (!path) return null;
+      const { collection, skippedGrpcCount } = treeToPostman(selectedTree, name);
+      await writeFileAtPath(path, JSON.stringify(collection, null, 2));
+      return { skippedGrpcCount };
+    },
+    [workspace.tree, workspace.name]
+  );
+
+  // A pre-request/test script's pm.variables.set(...) needs to persist, but
+  // must land back in whichever scope the variable actually came from — not
+  // get flattened into Globals just because it was merged in for send-time
+  // substitution (see systematic-debugging session note: this used to
+  // silently copy the whole active-environment pool into Globals on every
+  // single send).
+  const applyVariableChanges = useCallback(
+    (changed: Record<string, string>) => {
+      if (!Object.keys(changed).length) return;
+      const activeEnv = workspace.environments.find((e) => e.id === workspace.activeEnvironmentId);
+      const envKeys = new Set((activeEnv?.variables ?? []).map((v) => v.key));
+      const globalChanges: Record<string, string> = {};
+      const envChanges: Record<string, string> = {};
+      for (const [k, v] of Object.entries(changed)) {
+        if (envKeys.has(k)) envChanges[k] = v;
+        else globalChanges[k] = v;
+      }
+      if (Object.keys(globalChanges).length) {
+        const existingKeys = new Set(workspace.variables.map((r) => r.key));
+        const updated = workspace.variables.map((r) => (globalChanges[r.key] !== undefined ? { ...r, value: globalChanges[r.key] } : r));
+        const additions = Object.entries(globalChanges)
+          .filter(([k]) => !existingKeys.has(k))
+          .map(([k, v]) => ({ id: uid(), key: k, value: v, enabled: true }));
+        setVariables([...updated, ...additions]);
+      }
+      if (activeEnv && Object.keys(envChanges).length) {
+        const updated = activeEnv.variables.map((r) => (envChanges[r.key] !== undefined ? { ...r, value: envChanges[r.key] } : r));
+        setEnvironmentVariables(activeEnv.id, updated);
+      }
+    },
+    [workspace.variables, workspace.environments, workspace.activeEnvironmentId, setVariables, setEnvironmentVariables]
+  );
 
   const sendTab = useCallback(
     async (id: string) => {
@@ -635,14 +806,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           else merged.push(v);
         }
       }
-      const result = await runRequest(tab.draft, merged, setVariables);
+      const result = await runRequest(tab.draft, merged, applyVariableChanges);
       setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "http" ? { ...x, loading: false, response: result } : x)));
       if (responseCacheEnabled && workspaceDir) {
         responseCacheRef.current[id] = { kind: "http", response: result };
         persistResponseCache(workspaceDir);
       }
     },
-    [tabs, workspace.variables, workspace.environments, workspace.activeEnvironmentId, setVariables, responseCacheEnabled, workspaceDir, persistResponseCache]
+    [tabs, workspace.variables, workspace.environments, workspace.activeEnvironmentId, applyVariableChanges, responseCacheEnabled, workspaceDir, persistResponseCache]
   );
 
   const cacheGrpcResponse = useCallback(
@@ -749,6 +920,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       addFolder,
       addRequest,
       addGrpcRequest,
+      duplicateNode,
       renameNode,
       deleteNode,
       deleteNodes,
@@ -773,11 +945,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setActiveEnvironment,
       setEnvironmentVariables,
       importCollection,
+      importIntoFolder,
+      pendingImport,
+      confirmImport,
+      cancelImport,
+      importError,
+      dismissImportError,
       exportCollection,
+      pendingExport,
+      confirmExport,
+      cancelExport,
+      compareOpen,
+      openCompare,
+      closeCompare,
+      pauseAutosave,
+      resumeAutosave,
       moveNodes,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPortPersisted, mockServerRunningPort, mockServerError, toggleMockServer, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, exportCollection, moveNodes, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPortPersisted, mockServerRunningPort, mockServerError, toggleMockServer, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

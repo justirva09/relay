@@ -148,6 +148,50 @@ export function gitInit(dir: string): Promise<void> {
   return invoke("git_init", { dir });
 }
 
+export interface ApiHistoryEntry {
+  hash: string;
+  author: string;
+  date: string;
+  message: string;
+  content: string | null;
+}
+
+export function gitHistoryForNode(dir: string, nodeId: string): Promise<ApiHistoryEntry[]> {
+  return invoke("git_history_for_node", { dir, nodeId });
+}
+
+export function gitListBranches(dir: string): Promise<string[]> {
+  return invoke("git_list_branches", { dir });
+}
+
+export interface BranchDiffEntry {
+  path: string;
+  status: "added" | "removed" | "modified";
+  before: string | null;
+  after: string | null;
+  // HEAD's content, only populated in working-tree mode (compare: null) —
+  // lets the UI split committed-vs-base from uncommitted-on-top-of-HEAD.
+  head: string | null;
+}
+
+// compare: null diffs `base` against the current working tree (staged +
+// unstaged combined) instead of another branch — see git_branch_diff.
+export function gitBranchDiff(dir: string, base: string, compare: string | null): Promise<BranchDiffEntry[]> {
+  return invoke("git_branch_diff", { dir, base, compare });
+}
+
+// Stages exactly these paths (relative to dir) — for partial-field staging,
+// paired with writing a merged file to disk first. See git_add.
+export function gitAdd(dir: string, paths: string[]): Promise<void> {
+  return invoke("git_add", { dir, paths });
+}
+
+// Commits whatever is currently staged, without an implicit `add -A` first —
+// the counterpart to gitAdd above.
+export function gitCommitStaged(dir: string, message: string): Promise<void> {
+  return invoke("git_commit_staged", { dir, message });
+}
+
 export interface VersionStatus {
   blocked: boolean;
   message: string;

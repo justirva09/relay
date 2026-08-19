@@ -1,8 +1,9 @@
 import React, { useRef, useState } from "react";
 import { KVRow, newRow, uid } from "../types";
-import { useVariableMenu } from "../lib/useVariableMenu";
+import { useVariableMenu, VariableGroup } from "../lib/useVariableMenu";
 import VariableMenuList from "./VariableMenuList";
 import { highlightUrlTokens } from "../lib/urlHighlight";
+import AnchorPortal from "./AnchorPortal";
 
 interface Props {
   rows: KVRow[];
@@ -10,17 +11,20 @@ interface Props {
   placeholderKey: string;
   placeholderVal: string;
   showToggle?: boolean;
-  variables?: string[];
+  variables?: VariableGroup[];
+  lockedKeys?: string[];
 }
 
-export function ValueInput({ value, onChange, placeholder, variables }: {
+export function ValueInput({ value, onChange, placeholder, variables, disabled }: {
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
-  variables?: string[];
+  variables?: VariableGroup[];
+  disabled?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
   const { menu, recompute, close, move, hover, apply } = useVariableMenu(variables);
 
@@ -42,7 +46,7 @@ export function ValueInput({ value, onChange, placeholder, variables }: {
   };
 
   return (
-    <div className="relative flex-1 min-w-0">
+    <div ref={wrapRef} className="relative flex-1 min-w-0">
       <div
         className={`relative overflow-hidden bg-th-surface border rounded-md ${focused ? "border-th-border-focus" : "border-th-border-input"}`}
         onClick={() => inputRef.current?.focus()}
@@ -53,12 +57,13 @@ export function ValueInput({ value, onChange, placeholder, variables }: {
         <input
           ref={inputRef}
           value={value}
+          disabled={disabled}
           onChange={(e) => { onChange(e.target.value); syncScroll(); recompute(e.target.value, e.target.selectionStart ?? e.target.value.length); }}
           onKeyDown={(e) => {
             if (!menu) return;
             if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
             else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
-            else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); select(menu.items[menu.activeIndex]); }
+            else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); select(menu.items[menu.activeIndex].name); }
             else if (e.key === "Escape") { e.preventDefault(); close(); }
           }}
           onKeyUp={(e) => {
@@ -69,18 +74,20 @@ export function ValueInput({ value, onChange, placeholder, variables }: {
           onFocus={() => { setFocused(true); syncScroll(); }}
           onBlur={() => { setFocused(false); close(); }}
           placeholder={placeholder}
-          className="absolute inset-0 w-full h-full px-2.5 py-1.5 text-[13px] font-mono bg-transparent text-transparent caret-th-text-1 focus:outline-none"
+          className="absolute inset-0 w-full h-full px-2.5 py-1.5 text-[13px] font-mono bg-transparent text-transparent caret-th-text-1 focus:outline-none disabled:cursor-not-allowed"
           style={{ caretColor: "var(--c-text-1)" }}
         />
       </div>
       {menu && (
-        <VariableMenuList
-          items={menu.items}
-          activeIndex={menu.activeIndex}
-          onHover={hover}
-          onSelect={select}
-          style={{ top: "100%", left: `${menu.col}ch`, marginTop: "4px" }}
-        />
+        <AnchorPortal anchorRef={wrapRef}>
+          <VariableMenuList
+            items={menu.items}
+            activeIndex={menu.activeIndex}
+            onHover={hover}
+            onSelect={select}
+            style={{ top: "100%", left: `${menu.col}ch`, marginTop: "4px" }}
+          />
+        </AnchorPortal>
       )}
     </div>
   );
@@ -108,7 +115,7 @@ function parseBulk(text: string): KVRow[] {
   return rows.length ? rows : [newRow()];
 }
 
-export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, placeholderVal, showToggle = true, variables }: Props) {
+export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, placeholderVal, showToggle = true, variables, lockedKeys }: Props) {
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkText, setBulkText] = useState("");
 
@@ -167,37 +174,52 @@ export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, pla
         />
       ) : (
         <>
-          {rows.map((r) => (
-            <div key={r.id} className="flex items-center gap-2">
-              {showToggle && (
+          {rows.map((r) => {
+            const locked = !!lockedKeys?.some((lk) => lk.toLowerCase() === r.key.trim().toLowerCase());
+            return (
+              <div key={r.id} className={`flex items-center gap-2 ${locked ? "opacity-60" : ""}`}>
+                {showToggle && (
+                  <input
+                    type="checkbox"
+                    checked={r.enabled}
+                    disabled={locked}
+                    onChange={(e) => update(r.id, "enabled", e.target.checked)}
+                    className="h-3.5 w-3.5 accent-[var(--c-accent)] shrink-0 disabled:cursor-not-allowed"
+                  />
+                )}
                 <input
-                  type="checkbox"
-                  checked={r.enabled}
-                  onChange={(e) => update(r.id, "enabled", e.target.checked)}
-                  className="h-3.5 w-3.5 accent-[var(--c-accent)] shrink-0"
+                  value={r.key}
+                  disabled={locked}
+                  onChange={(e) => update(r.id, "key", e.target.value)}
+                  placeholder={placeholderKey}
+                  className="flex-1 min-w-0 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus disabled:cursor-not-allowed"
                 />
-              )}
-              <input
-                value={r.key}
-                onChange={(e) => update(r.id, "key", e.target.value)}
-                placeholder={placeholderKey}
-                className="flex-1 min-w-0 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
-              />
-              <ValueInput
-                value={r.value}
-                onChange={(v) => update(r.id, "value", v)}
-                placeholder={placeholderVal}
-                variables={variables}
-              />
-              <button
-                onClick={() => remove(r.id)}
-                className="shrink-0 h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-rose-400 hover:bg-rose-400/10 transition-colors"
-                aria-label="Remove row"
-              >
-                ×
-              </button>
-            </div>
-          ))}
+                <ValueInput
+                  value={locked ? "managed by Auth tab" : r.value}
+                  onChange={(v) => update(r.id, "value", v)}
+                  placeholder={placeholderVal}
+                  variables={variables}
+                  disabled={locked}
+                />
+                {locked ? (
+                  <span title="Managed by the Auth tab" className="shrink-0 h-6 w-6 grid place-items-center text-th-text-4">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="5" y="11" width="14" height="9" rx="2" />
+                      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                    </svg>
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => remove(r.id)}
+                    className="shrink-0 h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-rose-400 hover:bg-rose-400/10 transition-colors"
+                    aria-label="Remove row"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            );
+          })}
           <span className="text-[11px] text-th-text-4 font-mono">start typing to add a row</span>
         </>
       )}

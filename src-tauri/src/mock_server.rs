@@ -21,11 +21,44 @@ impl Default for MockServerState {
     }
 }
 
+#[derive(Debug)]
+struct ResolvedExample {
+    status: u16,
+    body: String,
+    is_default: bool,
+    // The X-Mock-Scenario value that selects this example — the example's
+    // own `scenarioKey` if it set one, else a slugified `name`. Resolved
+    // once here so `pick_example` just compares strings.
+    key: String,
+}
+
 struct MockRoute {
     method: String,
     path_template: String,
-    status: u16,
-    body: String,
+    examples: Vec<ResolvedExample>,
+}
+
+// An example's scenario key is derived from its name rather than stored as
+// a separate field — "Not Found" and a request header `X-Mock-Scenario:
+// not-found` line up without the user ever typing a slug anywhere. Same
+// algorithm on the TS side (ExamplesTab) so the hint shown in the UI always
+// matches what the server actually matches against.
+fn slugify(name: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_dash = true; // swallow leading dashes
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
 }
 
 // OpenAPI/Postman-style URLs often start with a "{{base_url}}"-type variable
@@ -63,7 +96,7 @@ fn path_matches(template: &str, actual: &str) -> bool {
     t.iter().zip(a.iter()).all(|(tp, ap)| tp.starts_with(':') || tp == ap)
 }
 
-fn collect_http_requests(tree: &Value, out: &mut Vec<(String, String, String)>) {
+fn collect_http_requests(tree: &Value, out: &mut Vec<(String, String, String, Value)>) {
     let Some(nodes) = tree.as_array() else { return };
     for node in nodes {
         match node.get("kind").and_then(|v| v.as_str()) {
@@ -77,10 +110,63 @@ fn collect_http_requests(tree: &Value, out: &mut Vec<(String, String, String)>) 
                 let request = node.get("request");
                 let method = request.and_then(|r| r.get("method")).and_then(|v| v.as_str()).unwrap_or("GET").to_uppercase();
                 let url = request.and_then(|r| r.get("url")).and_then(|v| v.as_str()).unwrap_or("");
-                out.push((method, extract_path_template(url), id));
+                let examples = request.and_then(|r| r.get("examples")).cloned().unwrap_or(Value::Null);
+                out.push((method, extract_path_template(url), id, examples));
             }
             _ => {}
         }
+    }
+}
+
+fn resolve_examples(examples: &Value, cached_response: Option<&Value>) -> Vec<ResolvedExample> {
+    if let Some(arr) = examples.as_array().filter(|a| !a.is_empty()) {
+        let has_default = arr.iter().any(|e| e.get("isDefault").and_then(|v| v.as_bool()) == Some(true));
+        return arr
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("example");
+                // scenarioKey overrides the name-derived slug when the user
+                // set one explicitly (see ExamplesTab.tsx) — trim+ignore an
+                // empty override so clearing the field falls back cleanly.
+                let key = e
+                    .get("scenarioKey")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(slugify)
+                    .unwrap_or_else(|| slugify(name));
+                ResolvedExample {
+                    status: e.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16,
+                    body: e.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    // Same "isDefault flag, else first" fallback as before —
+                    // just resolved once here instead of at lookup time.
+                    is_default: e.get("isDefault").and_then(|v| v.as_bool()).unwrap_or(false) || (!has_default && i == 0),
+                    key,
+                }
+            })
+            .collect();
+    }
+    // No persisted examples yet — fall back to the ephemeral response cache
+    // (a request nobody has saved an example for still mocks from its last
+    // real send), then a placeholder note if there's no cache either.
+    match cached_response {
+        Some(resp) => vec![ResolvedExample {
+            status: resp.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16,
+            body: resp.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            is_default: true,
+            key: "cached-response".to_string(),
+        }],
+        None => vec![ResolvedExample {
+            status: 200,
+            body: serde_json::json!({
+                "mock": true,
+                "note": "No example yet for this request — send it once and use \"Save as example\" in the response panel."
+            })
+            .to_string(),
+            is_default: true,
+            key: "default".to_string(),
+        }],
     }
 }
 
@@ -90,26 +176,34 @@ fn build_routes(workspace: &Value, response_cache: &Value) -> Vec<MockRoute> {
         collect_http_requests(tree, &mut raw);
     }
     raw.into_iter()
-        .map(|(method, path_template, id)| {
-            let cached = response_cache.get(&id).filter(|c| c.get("kind").and_then(|v| v.as_str()) == Some("http"));
-            let (status, body) = match cached.and_then(|c| c.get("response")) {
-                Some(resp) => {
-                    let status = resp.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
-                    let body = resp.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    (status, body)
-                }
-                None => (
-                    200,
-                    serde_json::json!({
-                        "mock": true,
-                        "note": "No cached example yet for this request — send it once in Relay to capture a real example response."
-                    })
-                    .to_string(),
-                ),
-            };
-            MockRoute { method, path_template, status, body }
+        .map(|(method, path_template, id, examples)| {
+            let cached = response_cache
+                .get(&id)
+                .filter(|c| c.get("kind").and_then(|v| v.as_str()) == Some("http"))
+                .and_then(|c| c.get("response"));
+            MockRoute { method, path_template, examples: resolve_examples(&examples, cached) }
         })
         .collect()
+}
+
+// `X-Mock-Scenario: not-found` picks the example whose resolved key is
+// "not-found" (see `resolve_examples` — either an explicit scenarioKey or a
+// slugified name) — absent the header, the default example wins. An
+// unrecognized scenario key is a caller mistake worth surfacing distinctly
+// rather than silently falling back to the default.
+fn pick_example<'a>(examples: &'a [ResolvedExample], scenario: Option<&str>) -> Result<&'a ResolvedExample, Vec<String>> {
+    if let Some(key) = scenario {
+        let wanted = slugify(key);
+        if let Some(ex) = examples.iter().find(|e| e.key == wanted) {
+            return Ok(ex);
+        }
+        return Err(examples.iter().map(|e| e.key.clone()).collect());
+    }
+    examples
+        .iter()
+        .find(|e| e.is_default)
+        .or_else(|| examples.first())
+        .ok_or_else(Vec::new)
 }
 
 fn json_response(status: u16, body: String) -> Response {
@@ -120,12 +214,53 @@ fn json_response(status: u16, body: String) -> Response {
         .unwrap()
 }
 
-async fn fallback_handler(State(routes): State<Arc<Vec<MockRoute>>>, req: axum::extract::Request) -> impl IntoResponse {
+struct MockContext {
+    app: AppHandle,
+    workspace_dir: String,
+}
+
+// Re-reads the workspace tree + response cache from disk on every request
+// instead of snapshotting routes once at server start — so saving a new
+// example (or editing a request) takes effect on the next mock hit without
+// having to Stop/Start the mock server. This is a local dev tool serving
+// occasional requests, so the extra file read per hit is negligible.
+fn load_routes(ctx: &MockContext) -> Vec<MockRoute> {
+    let workspace_raw = match crate::storage::load_workspace_dir(ctx.workspace_dir.clone()) {
+        Ok(raw) => raw,
+        Err(_) => return Vec::new(),
+    };
+    let envelope: Value = match serde_json::from_str(&workspace_raw) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let workspace = envelope.get("workspace").cloned().unwrap_or(Value::Null);
+    if workspace.is_null() {
+        return Vec::new();
+    }
+    let cache_raw = crate::response_cache::load_response_cache(ctx.app.clone(), ctx.workspace_dir.clone()).unwrap_or_else(|_| "{}".to_string());
+    let response_cache: Value = serde_json::from_str(&cache_raw).unwrap_or_else(|_| serde_json::json!({}));
+    build_routes(&workspace, &response_cache)
+}
+
+async fn fallback_handler(State(ctx): State<Arc<MockContext>>, req: axum::extract::Request) -> impl IntoResponse {
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
+    let scenario = req.headers().get("x-mock-scenario").and_then(|v| v.to_str().ok()).map(str::to_string);
+    let routes = load_routes(&ctx);
     for route in routes.iter() {
         if route.method == method && path_matches(&route.path_template, &path) {
-            return json_response(route.status, route.body.clone());
+            return match pick_example(&route.examples, scenario.as_deref()) {
+                Ok(example) => json_response(example.status, example.body.clone()),
+                Err(available) => json_response(
+                    404,
+                    serde_json::json!({
+                        "mock": true,
+                        "error": format!("No scenario named \"{}\" on this request", scenario.unwrap_or_default()),
+                        "available_scenarios": available
+                    })
+                    .to_string(),
+                ),
+            };
         }
     }
     json_response(
@@ -149,18 +284,17 @@ pub async fn start_mock_server(
         let _ = tx.send(());
     }
 
+    // Fail fast if there's genuinely no workspace here yet — once running,
+    // load_routes' per-request re-read tolerates transient read errors by
+    // just returning no routes (a 404) instead of crashing the server.
     let workspace_raw = crate::storage::load_workspace_dir(workspace_dir.clone())?;
     let envelope: Value = serde_json::from_str(&workspace_raw).map_err(|e| e.to_string())?;
-    let workspace = envelope.get("workspace").cloned().unwrap_or(Value::Null);
-    if workspace.is_null() {
+    if envelope.get("workspace").map(|w| w.is_null()).unwrap_or(true) {
         return Err("No workspace found at this folder yet".to_string());
     }
 
-    let cache_raw = crate::response_cache::load_response_cache(app, workspace_dir).unwrap_or_else(|_| "{}".to_string());
-    let response_cache: Value = serde_json::from_str(&cache_raw).unwrap_or_else(|_| serde_json::json!({}));
-
-    let routes = Arc::new(build_routes(&workspace, &response_cache));
-    let router = Router::new().fallback(any(fallback_handler)).with_state(routes);
+    let ctx = Arc::new(MockContext { app, workspace_dir });
+    let router = Router::new().fallback(any(fallback_handler)).with_state(ctx);
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
@@ -211,5 +345,106 @@ mod tests {
         assert!(path_matches("/v1/users/:id", "/v1/users/42"));
         assert!(!path_matches("/v1/users/:id", "/v1/users"));
         assert!(!path_matches("/v1/users/:id", "/v1/users/42/orders"));
+    }
+
+    fn request_node(id: &str, method: &str, url: &str, examples: Value) -> Value {
+        serde_json::json!({
+            "id": id, "kind": "request", "name": id,
+            "request": { "method": method, "url": url, "examples": examples }
+        })
+    }
+
+    #[test]
+    fn slugify_matches_the_frontend_scheme() {
+        assert_eq!(slugify("Not Found"), "not-found");
+        assert_eq!(slugify("200 OK"), "200-ok");
+        assert_eq!(slugify("  Unauthorized!! "), "unauthorized");
+    }
+
+    #[test]
+    fn build_routes_prefers_persisted_example_over_response_cache() {
+        let workspace = serde_json::json!({
+            "tree": [request_node(
+                "req-1", "GET", "/v1/portfolio/:id",
+                serde_json::json!([{ "id": "e1", "name": "Not Found", "status": 404, "body": "{\"code\":\"NOT_FOUND\"}", "isDefault": true }])
+            )]
+        });
+        // Stale cache from an old real send — should be ignored once an example exists.
+        let cache = serde_json::json!({ "req-1": { "kind": "http", "response": { "status": 200, "body": "stale" } } });
+        let routes = build_routes(&workspace, &cache);
+        assert_eq!(routes.len(), 1);
+        let picked = pick_example(&routes[0].examples, None).unwrap();
+        assert_eq!(picked.status, 404);
+        assert_eq!(picked.body, "{\"code\":\"NOT_FOUND\"}");
+    }
+
+    #[test]
+    fn build_routes_falls_back_to_response_cache_without_examples() {
+        let workspace = serde_json::json!({ "tree": [request_node("req-1", "GET", "/v1/users", Value::Null)] });
+        let cache = serde_json::json!({ "req-1": { "kind": "http", "response": { "status": 201, "body": "created" } } });
+        let routes = build_routes(&workspace, &cache);
+        let picked = pick_example(&routes[0].examples, None).unwrap();
+        assert_eq!(picked.status, 201);
+        assert_eq!(picked.body, "created");
+    }
+
+    fn examples_fixture() -> Vec<ResolvedExample> {
+        resolve_examples(
+            &serde_json::json!([
+                { "name": "Success", "status": 200, "body": "ok", "isDefault": true },
+                { "name": "Not Found", "status": 404, "body": "nf" },
+                { "name": "Server Error", "status": 500, "body": "err" },
+            ]),
+            None,
+        )
+    }
+
+    #[test]
+    fn pick_example_uses_default_when_no_scenario_requested() {
+        let examples = examples_fixture();
+        assert_eq!(pick_example(&examples, None).unwrap().status, 200);
+    }
+
+    #[test]
+    fn pick_example_matches_scenario_header_by_slug() {
+        let examples = examples_fixture();
+        assert_eq!(pick_example(&examples, Some("not-found")).unwrap().status, 404);
+        // Case/whitespace-insensitive, same slugify() on both sides.
+        assert_eq!(pick_example(&examples, Some("Server Error")).unwrap().status, 500);
+    }
+
+    #[test]
+    fn pick_example_reports_available_scenarios_on_unknown_key() {
+        let examples = examples_fixture();
+        let err = pick_example(&examples, Some("bogus")).unwrap_err();
+        assert_eq!(err, vec!["success", "not-found", "server-error"]);
+    }
+
+    #[test]
+    fn resolve_examples_defaults_to_first_when_none_flagged() {
+        let examples = resolve_examples(
+            &serde_json::json!([{ "name": "a", "status": 404, "body": "x" }, { "name": "b", "status": 200, "body": "y" }]),
+            None,
+        );
+        assert!(examples[0].is_default);
+        assert!(!examples[1].is_default);
+    }
+
+    #[test]
+    fn scenario_key_override_wins_over_the_slugified_name() {
+        let examples = resolve_examples(
+            &serde_json::json!([
+                { "name": "Portfolio — Not Found", "status": 404, "body": "nf", "scenarioKey": "not-found" },
+            ]),
+            None,
+        );
+        assert_eq!(examples[0].key, "not-found");
+        assert_eq!(pick_example(&examples, Some("not-found")).unwrap().status, 404);
+    }
+
+    #[test]
+    fn blank_scenario_key_falls_back_to_slugified_name() {
+        let examples = resolve_examples(&serde_json::json!([{ "name": "New Example", "status": 200, "body": "ok", "scenarioKey": "  " }]), None);
+        assert_eq!(examples[0].key, "new-example");
     }
 }

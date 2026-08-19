@@ -15,12 +15,22 @@ function bytesToSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function ResponsePanel({ response, loading }: { response: ResponseState | null; loading: boolean }) {
-  const [respTab, setRespTab] = useState<"body" | "headers" | "tests" | "console">("body");
+export default function ResponsePanel({
+  response,
+  loading,
+  onSaveExample,
+}: {
+  response: ResponseState | null;
+  loading: boolean;
+  onSaveExample?: () => void;
+}) {
+  const [respTab, setRespTab] = useState<"body" | "headers" | "request" | "tests" | "console">("body");
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (response) {
       setRespTab("body");
+      setSaved(false);
     }
   }, [response]);
 
@@ -29,6 +39,7 @@ export default function ResponsePanel({ response, loading }: { response: Respons
 
   const respTabs: { key: typeof respTab; label: string }[] = [{ key: "body", label: "Body" }];
   if (response && !response.error) respTabs.push({ key: "headers", label: `Headers (${response.headers.length})` });
+  if (response) respTabs.push({ key: "request", label: `Request (${response.request.headers.length})` });
   if (testsTotal > 0) respTabs.push({ key: "tests", label: `Tests (${testsPassed}/${testsTotal})` });
   if (response?.logs.length || response?.preError) respTabs.push({ key: "console", label: "Console" });
 
@@ -63,6 +74,17 @@ export default function ResponsePanel({ response, loading }: { response: Respons
           )
         ) : (
           <span className="text-th-text-4">response will appear here</span>
+        )}
+        {response && response.status != null && onSaveExample && (
+          <button
+            onClick={() => {
+              onSaveExample();
+              setSaved(true);
+            }}
+            className="ml-auto shrink-0 px-2 py-1 rounded-md text-[11.5px] font-mono border border-th-border-input text-th-text-3 hover:text-th-accent-text hover:bg-th-hover transition-colors"
+          >
+            {saved ? "Saved as example" : "Save as example"}
+          </button>
         )}
       </div>
 
@@ -134,6 +156,35 @@ export default function ResponsePanel({ response, loading }: { response: Respons
                   </div>
                 ))}
                 {response.headers.length === 0 && <span className="text-th-text-4 text-[12.5px] font-mono">no headers</span>}
+              </div>
+            )}
+
+            {response && respTab === "request" && (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <p className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mb-1.5">Sent to</p>
+                  <p className="text-[12.5px] font-mono text-th-text-1 break-all">
+                    <span className="text-th-accent-text">{response.request.method}</span> {response.request.url}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mb-1.5">Headers</p>
+                  <div className="flex flex-col gap-1">
+                    {response.request.headers.map(([k, v], i) => (
+                      <div key={`${k}-${i}`} className="text-[12.5px] font-mono flex gap-2">
+                        <span className="text-th-accent-text shrink-0">{k}:</span>
+                        <span className="text-th-text-2 break-all">{v}</span>
+                      </div>
+                    ))}
+                    {response.request.headers.length === 0 && <span className="text-th-text-4 text-[12.5px] font-mono">no headers</span>}
+                  </div>
+                </div>
+                {response.request.body !== undefined && (
+                  <div>
+                    <p className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mb-1.5">Body</p>
+                    <CodeView value={response.request.body} className="-mx-4" />
+                  </div>
+                )}
               </div>
             )}
 

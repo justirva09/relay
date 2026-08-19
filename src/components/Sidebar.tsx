@@ -264,7 +264,14 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
         onClick={(e) => { if (suppressNextClick) return; if (!onItemClick(node.id, e)) return; openTab(node.id); }}
         onContextMenu={(e) => onCtxMenu(e, node)}
       >
-        <span className="font-mono text-[9.5px] font-bold w-9 shrink-0 text-th-accent-text">gRPC</span>
+        <span
+          title={node.request.protoSource === "reflection" ? "Server reflection" : undefined}
+          className={`font-mono text-[9.5px] font-bold w-9 shrink-0 ${
+            node.request.protoSource === "reflection" ? "text-rose-400" : "text-th-accent-text"
+          }`}
+        >
+          gRPC
+        </span>
         {editing ? (
           <input
             autoFocus
@@ -361,7 +368,7 @@ const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 260;
 
 export default function Sidebar() {
-  const { workspace, addFolder, addRequest, addGrpcRequest, deleteNodes, moveNodes, renameWorkspace, collapseAllFolders } = useWorkspace();
+  const { workspace, addFolder, addRequest, addGrpcRequest, duplicateNode, deleteNodes, moveNodes, renameWorkspace, collapseAllFolders, importIntoFolder } = useWorkspace();
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [triggerEditId, setTriggerEditId] = useState<string | null>(null);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
@@ -713,6 +720,16 @@ export default function Sidebar() {
                     New Folder
                   </button>
                   <div className="my-1 border-t border-th-border" />
+                  <button
+                    onClick={() => {
+                      importIntoFolder(ctxMenu.nodeId);
+                      setCtxMenu(null);
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+                  >
+                    Import Here...
+                  </button>
+                  <div className="my-1 border-t border-th-border" />
                 </>
               )}
               <button
@@ -723,6 +740,15 @@ export default function Sidebar() {
                 className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
               >
                 Rename
+              </button>
+              <button
+                onClick={() => {
+                  duplicateNode(ctxMenu.nodeId);
+                  setCtxMenu(null);
+                }}
+                className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+              >
+                Duplicate
               </button>
               <button
                 onClick={() => {

@@ -6,6 +6,8 @@ import {
   KVRow,
   Method,
   FormDataRow,
+  AuthConfig,
+  defaultAuth,
   defaultRequest,
   newRow,
   newFormDataRow,
@@ -101,7 +103,8 @@ function firstPathSegment(path: string): string {
 
 interface AuthResult {
   header?: [string, string];
-  variable?: KVRow;
+  variables?: KVRow[];
+  auth?: AuthConfig;
 }
 
 function resolveGlobalAuth(spec: any): AuthResult {
@@ -113,14 +116,23 @@ function resolveGlobalAuth(spec: any): AuthResult {
   if (!scheme) return {};
 
   if (scheme.type === "http" && scheme.scheme === "bearer") {
-    return { header: ["Authorization", "Bearer {{token}}"], variable: { id: uid(), key: "token", value: "", enabled: true } };
+    return {
+      auth: { type: "bearer", bearer: { token: "{{token}}" } },
+      variables: [{ id: uid(), key: "token", value: "", enabled: true }],
+    };
   }
   if (scheme.type === "http" && scheme.scheme === "basic") {
-    return { header: ["Authorization", "Basic {{basicAuth}}"], variable: { id: uid(), key: "basicAuth", value: "", enabled: true } };
+    return {
+      auth: { type: "basic", basic: { username: "{{basicUser}}", password: "{{basicPass}}" } },
+      variables: [
+        { id: uid(), key: "basicUser", value: "", enabled: true },
+        { id: uid(), key: "basicPass", value: "", enabled: true },
+      ],
+    };
   }
   if (scheme.type === "apiKey" && scheme.in === "header") {
     const varName = (scheme.name || "apiKey").replace(/[^a-zA-Z0-9_]/g, "") || "apiKey";
-    return { header: [scheme.name, `{{${varName}}}`], variable: { id: uid(), key: varName, value: "", enabled: true } };
+    return { header: [scheme.name, `{{${varName}}}`], variables: [{ id: uid(), key: varName, value: "", enabled: true }] };
   }
   return {};
 }
@@ -214,6 +226,7 @@ export function parseOpenApiSpec(spec: any): { tree: TreeNode[]; name: string; v
         params: queryRows.length ? queryRows : [newRow()],
         pathParams: pathParamRows,
         headers: headerRows,
+        auth: auth.auth ?? defaultAuth(),
         ...body,
       };
 
@@ -230,6 +243,6 @@ export function parseOpenApiSpec(spec: any): { tree: TreeNode[]; name: string; v
     children,
   }));
 
-  const variables: KVRow[] = auth.variable ? [auth.variable] : [];
+  const variables: KVRow[] = auth.variables ?? [];
   return { tree, name: spec.info?.title || "Imported API", variables };
 }

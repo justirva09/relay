@@ -18,6 +18,42 @@ export function newFormDataRow(): FormDataRow {
   return { ...newRow(), type: "text" };
 }
 
+// Discriminated union so later auth types (AWS SigV4, OAuth2) slot in as
+// more optional variant fields without restructuring existing requests.
+export type AuthType = "none" | "bearer" | "basic";
+
+export interface AuthConfig {
+  type: AuthType;
+  bearer?: { token: string };
+  basic?: { username: string; password: string };
+}
+
+export function defaultAuth(): AuthConfig {
+  return { type: "none" };
+}
+
+// A saved response snapshot the mock server can serve back — the same data
+// a real send already produces (ResponseState), pared down to what a mock
+// route needs and kept inside RequestData so it's committed to `.relay`
+// with the request instead of living in the ephemeral response cache.
+export interface Example {
+  id: string;
+  name: string;
+  status: number;
+  headers: [string, string][];
+  body: string;
+  // Exactly one example (per request) should be isDefault at a time — the
+  // one the local mock server serves. Not enforced by the type; callers
+  // (setDefaultExample) keep that invariant.
+  isDefault?: boolean;
+  // The X-Mock-Scenario value that selects this example — defaults to a
+  // slugified `name` when unset (see slugify() in RequestPanel.tsx and
+  // mock_server.rs), but is independently editable so the display name can
+  // stay descriptive ("Portfolio — Not Found") while the header stays short
+  // ("not-found").
+  scenarioKey?: string;
+}
+
 export interface RequestData {
   method: Method;
   url: string;
@@ -25,12 +61,14 @@ export interface RequestData {
   params: KVRow[];
   pathParams: KVRow[];
   headers: KVRow[];
+  auth: AuthConfig;
   bodyMode: BodyMode;
   bodyText: string;
   bodyForm: FormDataRow[];
   bodyUrlencoded: KVRow[];
   preScript: string;
   testScript: string;
+  examples: Example[];
 }
 
 export type GrpcMethodType = "unary" | "server-stream" | "client-stream" | "bidi";
@@ -103,6 +141,16 @@ export interface TestResult {
   error?: string;
 }
 
+// What was actually sent over the wire (after variable substitution, Auth
+// tab header injection, auto Content-Type, etc.) — captured regardless of
+// whether the request succeeded, so a failure is debuggable too.
+export interface SentRequest {
+  method: string;
+  url: string;
+  headers: [string, string][];
+  body?: string;
+}
+
 export interface ResponseState {
   status: number | null;
   statusText: string;
@@ -115,6 +163,7 @@ export interface ResponseState {
   testResults: TestResult[];
   logs: string[];
   preError: string | null;
+  request: SentRequest;
 }
 
 export interface HttpTabState {
@@ -200,7 +249,16 @@ export function normalizeRequestData(req: any): RequestData {
     bodyForm: Array.isArray(req.bodyForm) ? req.bodyForm : [newFormDataRow()],
     bodyUrlencoded: Array.isArray(req.bodyUrlencoded) ? req.bodyUrlencoded : [newRow()],
     description: typeof req.description === "string" ? req.description : "",
+    auth: req.auth && typeof req.auth === "object" ? req.auth : defaultAuth(),
+    examples: Array.isArray(req.examples) ? req.examples : [],
   };
+}
+
+// Names a fresh saved example from its response — timestamp keeps repeated
+// saves of the same status from colliding, user can rename afterward.
+export function nameExample(status: number, statusText: string): string {
+  const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `${status} ${statusText || ""}`.trim() + ` · ${time}`;
 }
 
 export function encodeUrlencodedRows(rows: KVRow[]): string {
@@ -228,12 +286,14 @@ export function defaultRequest(method: Method = "GET", url = ""): RequestData {
     params: parseQueryToRows(url),
     pathParams: parsePathParamsFromUrl(url),
     headers: [newRow()],
+    auth: defaultAuth(),
     bodyMode: "none",
     bodyText: "",
     bodyForm: [newFormDataRow()],
     bodyUrlencoded: [newRow()],
     preScript: "",
     testScript: "",
+    examples: [],
   };
 }
 

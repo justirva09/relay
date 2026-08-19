@@ -41,30 +41,10 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const handleImport = async () => {
-    try {
-      await importCollection();
-      setStatus("Collection imported.");
-    } catch (e: any) {
-      setStatus(`Import failed: ${e.message || e}`);
-    }
-  };
-
-  const handleExport = async () => {
-    try {
-      const result = await exportCollection();
-      if (!result) return;
-      if (result.skippedGrpcCount > 0) {
-        setStatus(
-          `Collection exported. ${result.skippedGrpcCount} gRPC request${result.skippedGrpcCount === 1 ? "" : "s"} skipped — Postman does not support gRPC in collection exports.`
-        );
-      } else {
-        setStatus("Collection exported.");
-      }
-    } catch (e: any) {
-      setStatus(`Export failed: ${e.message || e}`);
-    }
-  };
+  // Opens the folder/request picker; the picker, sync-merge, and result
+  // toast are handled globally (App.tsx) since import/export can also be
+  // triggered from the Sidebar's "Import Here..." folder menu.
+  const handleImport = () => importCollection();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-th-overlay" onClick={onClose}>
@@ -174,7 +154,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                 Import Collection
               </button>
               <button
-                onClick={handleExport}
+                onClick={exportCollection}
                 className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-[13px] font-medium bg-th-bg border border-th-border-input text-th-text-1 hover:border-th-accent-border hover:text-th-accent-text"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

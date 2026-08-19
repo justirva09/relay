@@ -1,4 +1,4 @@
-import { TreeNode, FolderNode, RequestNode, KVRow, Method, BodyMode, FormDataRow, defaultRequest, newRow, newFormDataRow, uid, parseQueryToRows, parsePathParamsFromUrl } from "../types";
+import { TreeNode, FolderNode, RequestNode, KVRow, Method, BodyMode, FormDataRow, AuthConfig, defaultAuth, defaultRequest, newRow, newFormDataRow, uid, parseQueryToRows, parsePathParamsFromUrl } from "../types";
 
 const POSTMAN_SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
 
@@ -38,17 +38,61 @@ interface PostmanUrl {
   query?: { key: string; value: string; disabled?: boolean }[];
 }
 
+interface PostmanAuthField {
+  key: string;
+  value?: string;
+  type?: string;
+}
+
+interface PostmanAuth {
+  type: string;
+  bearer?: PostmanAuthField[];
+  basic?: PostmanAuthField[];
+}
+
 interface PostmanRequest {
   method?: string;
   header?: PostmanHeader[];
   body?: PostmanBody;
   url?: string | PostmanUrl;
   description?: string | { content?: string };
+  auth?: PostmanAuth;
 }
 
 function extractDescription(desc: string | { content?: string } | undefined): string {
   if (!desc) return "";
   return typeof desc === "string" ? desc : desc.content || "";
+}
+
+function fieldValue(fields: PostmanAuthField[] | undefined, key: string): string {
+  return fields?.find((f) => f.key === key)?.value ?? "";
+}
+
+function parsePostmanAuth(auth: PostmanAuth | undefined): AuthConfig {
+  if (!auth) return defaultAuth();
+  if (auth.type === "bearer") {
+    return { type: "bearer", bearer: { token: fieldValue(auth.bearer, "token") } };
+  }
+  if (auth.type === "basic") {
+    return { type: "basic", basic: { username: fieldValue(auth.basic, "username"), password: fieldValue(auth.basic, "password") } };
+  }
+  return defaultAuth();
+}
+
+function authToPostman(auth: AuthConfig): PostmanAuth | undefined {
+  if (auth.type === "bearer") {
+    return { type: "bearer", bearer: [{ key: "token", value: auth.bearer?.token ?? "", type: "string" }] };
+  }
+  if (auth.type === "basic") {
+    return {
+      type: "basic",
+      basic: [
+        { key: "username", value: auth.basic?.username ?? "", type: "string" },
+        { key: "password", value: auth.basic?.password ?? "", type: "string" },
+      ],
+    };
+  }
+  return undefined;
 }
 
 interface PostmanItem {
@@ -149,12 +193,14 @@ function parsePostmanItem(item: PostmanItem): TreeNode {
       params: parseQueryToRows(rawUrl),
       pathParams: parsePathParamsFromUrl(rawUrl),
       headers,
+      auth: parsePostmanAuth(req.auth),
       bodyMode,
       bodyText,
       bodyForm,
       bodyUrlencoded,
       preScript: "",
       testScript: "",
+      examples: [],
     },
   };
   return node;
@@ -232,6 +278,7 @@ function treeNodeToPostmanItem(node: TreeNode): PostmanItem | null {
       body,
       url: urlObj,
       ...(req.description.trim() ? { description: req.description } : {}),
+      ...(authToPostman(req.auth) ? { auth: authToPostman(req.auth) } : {}),
     },
   };
 }

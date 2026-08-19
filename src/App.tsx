@@ -6,12 +6,16 @@ import ResponsePanel from "./components/ResponsePanel";
 import GrpcPanel from "./components/GrpcPanel";
 import GrpcResponsePanel from "./components/GrpcResponsePanel";
 import OverviewPage from "./components/OverviewPage";
+import BranchComparePanel from "./components/BranchComparePanel";
 import { EnvironmentBar } from "./components/EnvironmentModal";
 import { WorkspaceProvider, useWorkspace } from "./store";
 import { ThemeProvider } from "./lib/theme";
 import { LayoutProvider, useLayout } from "./lib/layout";
 import { pickProtoFolder, listProtoFilesInDir } from "./lib/tauri";
 import VersionGate from "./components/VersionGate";
+import { uid, nameExample } from "./types";
+import TreePickerModal from "./components/TreePickerModal";
+import { TreeNode } from "./types";
 
 function UnsavedModal() {
   const { pendingCloseId, confirmCloseTab, workspace } = useWorkspace();
@@ -61,6 +65,85 @@ function UnsavedModal() {
         </div>
       </div>
     </div>
+  );
+}
+
+function findFolderName(nodes: TreeNode[], id: string): string | null {
+  for (const n of nodes) {
+    if (n.id === id) return n.name;
+    if (n.kind === "folder") {
+      const found = findFolderName(n.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Renders the import/export request picker and its result toast globally,
+// since import can be triggered either from Settings (whole-collection) or
+// from the Sidebar's per-folder "Import Here..." menu.
+function ImportExportModals() {
+  const { workspace, pendingImport, confirmImport, cancelImport, pendingExport, confirmExport, cancelExport, importError, dismissImportError } = useWorkspace();
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const targetFolderName = pendingImport?.targetFolderId ? findFolderName(workspace.tree, pendingImport.targetFolderId) : null;
+
+  return (
+    <>
+      {pendingImport && (
+        <TreePickerModal
+          tree={pendingImport.tree}
+          title={targetFolderName ? `Select requests to import into "${targetFolderName}"` : "Select requests to import"}
+          confirmLabel="Import"
+          onConfirm={(ids) => {
+            const stats = confirmImport(ids);
+            setToast(`Sync import: ${stats.added} added, ${stats.updated} updated.`);
+          }}
+          onCancel={cancelImport}
+        />
+      )}
+      {pendingExport && (
+        <TreePickerModal
+          tree={workspace.tree}
+          title="Select requests to export"
+          confirmLabel="Export"
+          onConfirm={async (ids) => {
+            const result = await confirmExport(ids);
+            if (!result) return;
+            setToast(
+              result.skippedGrpcCount > 0
+                ? `Collection exported. ${result.skippedGrpcCount} gRPC request${result.skippedGrpcCount === 1 ? "" : "s"} skipped — Postman does not support gRPC in collection exports.`
+                : "Collection exported."
+            );
+          }}
+          onCancel={cancelExport}
+        />
+      )}
+      {importError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-th-overlay" onClick={dismissImportError}>
+          <div className="bg-th-surface border border-th-border rounded-lg shadow-2xl w-[360px] p-5" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-[14px] font-semibold text-th-text-1 mb-2">Import failed</h3>
+            <p className="text-[13px] text-th-text-2 mb-5">{importError}</p>
+            <div className="flex justify-end">
+              <button onClick={dismissImportError} className="px-4 py-1.5 rounded-md text-[12.5px] bg-th-accent text-white hover:bg-th-accent-hover">
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-th-elevated border border-th-border rounded-md shadow-xl px-4 py-2 text-[12.5px] text-th-text-1">
+          {toast}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -180,7 +263,7 @@ function WorkspaceFolderBanner() {
 }
 
 function Main() {
-  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, setProtoLibrary } = useWorkspace();
+  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, setProtoLibrary, compareOpen, closeCompare } = useWorkspace();
   const activeTab = tabs.find((t) => t.nodeId === activeTabId) || null;
   const { responseLayout } = useLayout();
   const [showOverview, setShowOverview] = useState(false);
@@ -191,6 +274,22 @@ function Main() {
   useEffect(() => {
     if (openTick > 0) setShowOverview(false);
   }, [openTick]);
+
+  // Same reasoning applies to Compare — it took over the whole content area,
+  // so clicking any request in the sidebar should dismiss it like every
+  // other full-area view does, not leave it stuck until the X is clicked.
+  useEffect(() => {
+    if (openTick > 0) closeCompare();
+  }, [openTick, closeCompare]);
+
+  useEffect(() => {
+    if (!compareOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeCompare();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [compareOpen, closeCompare]);
 
   const [splitWidth, setSplitWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem("relay-split-width"));
@@ -296,6 +395,7 @@ function Main() {
     }
     return (
       <RequestPanel
+        nodeId={activeTab.nodeId}
         draft={activeTab.draft}
         loading={activeTab.loading}
         dirty={activeTab.dirty}
@@ -311,7 +411,34 @@ function Main() {
     if (activeTab.kind === "grpc") {
       return <GrpcResponsePanel log={activeTab.log} streaming={activeTab.streaming} lastResponse={activeTab.lastResponse} />;
     }
-    return <ResponsePanel response={activeTab.response} loading={activeTab.loading} />;
+    const response = activeTab.response;
+    return (
+      <ResponsePanel
+        response={response}
+        loading={activeTab.loading}
+        onSaveExample={
+          response && response.status != null
+            ? () => {
+                let body = response.body;
+                try {
+                  body = JSON.stringify(JSON.parse(body), null, 2);
+                } catch {
+                  // not JSON — save the raw body as-is
+                }
+                const example = {
+                  id: uid(),
+                  name: nameExample(response.status!, response.statusText),
+                  status: response.status!,
+                  headers: response.headers,
+                  body,
+                  isDefault: activeTab.draft.examples.length === 0,
+                };
+                updateDraft(activeTab.nodeId, { examples: [...activeTab.draft.examples, example] });
+              }
+            : undefined
+        }
+      />
+    );
   };
 
   return (
@@ -321,7 +448,9 @@ function Main() {
         <WorkspaceFolderBanner />
         <EnvironmentBar onShowOverview={() => setShowOverview(true)} />
         <TabBar />
-        {!activeTab || showOverview ? (
+        {compareOpen ? (
+          <BranchComparePanel onClose={closeCompare} />
+        ) : !activeTab || showOverview ? (
           <OverviewPage />
         ) : (
           <div ref={containerRef} className={`flex-1 flex min-h-0 ${responseLayout === "bottom" ? "flex-col" : ""}`}>
@@ -357,6 +486,7 @@ function Main() {
       </div>
       <UnsavedModal />
       <WorkspaceSetupModal />
+      <ImportExportModals />
     </div>
   );
 }
