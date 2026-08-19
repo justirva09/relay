@@ -4,6 +4,9 @@ import { useVariableMenu, VariableGroup } from "../lib/useVariableMenu";
 import VariableMenuList from "./VariableMenuList";
 import { highlightUrlTokens } from "../lib/urlHighlight";
 import AnchorPortal from "./AnchorPortal";
+import { useVariableHover, variableTokenAtElement, useModifierHeld, VariableInfo } from "../lib/useVariableHover";
+import VariableHoverTooltip from "./VariableHoverTooltip";
+import { useWorkspace } from "../store";
 
 interface Props {
   rows: KVRow[];
@@ -12,14 +15,16 @@ interface Props {
   placeholderVal: string;
   showToggle?: boolean;
   variables?: VariableGroup[];
+  variableInfo?: VariableInfo;
   lockedKeys?: string[];
 }
 
-export function ValueInput({ value, onChange, placeholder, variables, disabled }: {
+export function ValueInput({ value, onChange, placeholder, variables, variableInfo, disabled }: {
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
   variables?: VariableGroup[];
+  variableInfo?: VariableInfo;
   disabled?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -27,6 +32,9 @@ export function ValueInput({ value, onChange, placeholder, variables, disabled }
   const wrapRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
   const { menu, recompute, close, move, hover, apply } = useVariableMenu(variables);
+  const { openEnvironmentModal } = useWorkspace();
+  const hovered = useVariableHover(wrapRef, overlayRef);
+  const modifierHeld = useModifierHeld();
 
   const syncScroll = () => {
     requestAnimationFrame(() => {
@@ -49,10 +57,20 @@ export function ValueInput({ value, onChange, placeholder, variables, disabled }
     <div ref={wrapRef} className="relative flex-1 min-w-0">
       <div
         className={`relative overflow-hidden bg-th-surface border rounded-md ${focused ? "border-th-border-focus" : "border-th-border-input"}`}
-        onClick={() => inputRef.current?.focus()}
+        onClick={(e) => {
+          if ((e.metaKey || e.ctrlKey) && variableInfo) {
+            const name = variableTokenAtElement(overlayRef.current, e.clientX, e.clientY);
+            const info = name ? variableInfo[name] : undefined;
+            if (info) {
+              openEnvironmentModal(info.tabId, name!);
+              return;
+            }
+          }
+          inputRef.current?.focus();
+        }}
       >
         <div ref={overlayRef} className="px-2.5 py-1.5 text-[13px] font-mono whitespace-pre overflow-hidden pointer-events-none" aria-hidden>
-          {value ? highlightUrlTokens(value, false) : <span className="text-th-text-4">{placeholder}</span>}
+          {value ? highlightUrlTokens(value, false, variables) : <span className="text-th-text-4">{placeholder}</span>}
         </div>
         <input
           ref={inputRef}
@@ -75,7 +93,7 @@ export function ValueInput({ value, onChange, placeholder, variables, disabled }
           onBlur={() => { setFocused(false); close(); }}
           placeholder={placeholder}
           className="absolute inset-0 w-full h-full px-2.5 py-1.5 text-[13px] font-mono bg-transparent text-transparent caret-th-text-1 focus:outline-none disabled:cursor-not-allowed"
-          style={{ caretColor: "var(--c-text-1)" }}
+          style={{ caretColor: "var(--c-text-1)", cursor: hovered && modifierHeld ? "pointer" : undefined }}
         />
       </div>
       {menu && (
@@ -89,6 +107,7 @@ export function ValueInput({ value, onChange, placeholder, variables, disabled }
           />
         </AnchorPortal>
       )}
+      {hovered && <VariableHoverTooltip x={hovered.x} y={hovered.y} name={hovered.name} info={variableInfo?.[hovered.name]} />}
     </div>
   );
 }
@@ -115,7 +134,7 @@ function parseBulk(text: string): KVRow[] {
   return rows.length ? rows : [newRow()];
 }
 
-export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, placeholderVal, showToggle = true, variables, lockedKeys }: Props) {
+export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, placeholderVal, showToggle = true, variables, variableInfo, lockedKeys }: Props) {
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkText, setBulkText] = useState("");
 
@@ -155,7 +174,7 @@ export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, pla
   };
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1.5 pb-4">
       <div className="flex justify-end">
         <button
           onClick={() => (bulkMode ? exitBulkMode() : enterBulkMode())}
@@ -174,52 +193,89 @@ export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, pla
         />
       ) : (
         <>
-          {rows.map((r) => {
-            const locked = !!lockedKeys?.some((lk) => lk.toLowerCase() === r.key.trim().toLowerCase());
-            return (
-              <div key={r.id} className={`flex items-center gap-2 ${locked ? "opacity-60" : ""}`}>
-                {showToggle && (
-                  <input
-                    type="checkbox"
-                    checked={r.enabled}
-                    disabled={locked}
-                    onChange={(e) => update(r.id, "enabled", e.target.checked)}
-                    className="h-3.5 w-3.5 accent-[var(--c-accent)] shrink-0 disabled:cursor-not-allowed"
-                  />
-                )}
-                <input
-                  value={r.key}
-                  disabled={locked}
-                  onChange={(e) => update(r.id, "key", e.target.value)}
-                  placeholder={placeholderKey}
-                  className="flex-1 min-w-0 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus disabled:cursor-not-allowed"
-                />
-                <ValueInput
-                  value={locked ? "managed by Auth tab" : r.value}
-                  onChange={(v) => update(r.id, "value", v)}
-                  placeholder={placeholderVal}
-                  variables={variables}
-                  disabled={locked}
-                />
-                {locked ? (
-                  <span title="Managed by the Auth tab" className="shrink-0 h-6 w-6 grid place-items-center text-th-text-4">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="5" y="11" width="14" height="9" rx="2" />
-                      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-                    </svg>
-                  </span>
-                ) : (
-                  <button
-                    onClick={() => remove(r.id)}
-                    className="shrink-0 h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-rose-400 hover:bg-rose-400/10 transition-colors"
-                    aria-label="Remove row"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            );
-          })}
+          <div className="overflow-x-auto border border-th-border rounded-md">
+            <table className="w-full border-collapse text-[13px] font-mono">
+              <thead>
+                <tr className="border-b border-th-border">
+                  {showToggle && <th className="w-8 px-2 py-2" />}
+                  <th className="text-left font-medium text-th-text-3 text-[11px] uppercase tracking-wide px-2 py-2 w-[26%]">Name</th>
+                  <th className="text-left font-medium text-th-text-3 text-[11px] uppercase tracking-wide px-2 py-2 w-[34%]">Value</th>
+                  <th className="text-left font-medium text-th-text-3 text-[11px] uppercase tracking-wide px-2 py-2">Description</th>
+                  <th className="w-8 px-2 py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const locked = !!lockedKeys?.some((lk) => lk.toLowerCase() === r.key.trim().toLowerCase());
+                  return (
+                    <tr key={r.id} className={`border-b border-th-border last:border-0 ${locked ? "opacity-60" : ""}`}>
+                      {showToggle && (
+                        <td className="px-2 py-1.5 align-middle">
+                          <div className="grid place-items-center">
+                            <input
+                              type="checkbox"
+                              checked={r.enabled}
+                              disabled={locked}
+                              onChange={(e) => update(r.id, "enabled", e.target.checked)}
+                              className="h-3.5 w-3.5 accent-[var(--c-accent)] shrink-0 disabled:cursor-not-allowed"
+                            />
+                          </div>
+                        </td>
+                      )}
+                      <td className="px-2 py-1.5 align-middle">
+                        <input
+                          value={r.key}
+                          disabled={locked}
+                          onChange={(e) => update(r.id, "key", e.target.value)}
+                          placeholder={placeholderKey}
+                          className="w-full min-w-0 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus disabled:cursor-not-allowed"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5 align-middle">
+                        <ValueInput
+                          value={locked ? "managed by Auth tab" : r.value}
+                          onChange={(v) => update(r.id, "value", v)}
+                          placeholder={placeholderVal}
+                          variables={variables}
+                          variableInfo={variableInfo}
+                          disabled={locked}
+                        />
+                      </td>
+                      <td className="px-2 py-1.5 align-middle">
+                        <input
+                          value={r.description ?? ""}
+                          disabled={locked}
+                          onChange={(e) => update(r.id, "description", e.target.value)}
+                          placeholder="Description"
+                          className="w-full min-w-0 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus disabled:cursor-not-allowed"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5 align-middle">
+                        <div className="grid place-items-center">
+                          {locked ? (
+                            <span title="Managed by the Auth tab" className="shrink-0 h-6 w-6 grid place-items-center text-th-text-4">
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="5" y="11" width="14" height="9" rx="2" />
+                                <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                              </svg>
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => remove(r.id)}
+                              className="shrink-0 h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-rose-400 hover:bg-rose-400/10 transition-colors"
+                              aria-label="Remove row"
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           <span className="text-[11px] text-th-text-4 font-mono">start typing to add a row</span>
         </>
       )}

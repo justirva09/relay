@@ -1,4 +1,4 @@
-import { AuthConfig, KVRow, RequestData } from "../types";
+import { AuthConfig, KVRow, RequestData, normalizeRequestData } from "../types";
 
 export type DiffCategory = "method" | "url" | "auth" | "query" | "header" | "body";
 
@@ -106,8 +106,8 @@ export function buildHistoryTimeline(entries: { hash: string; author: string; da
     }
     let diffLines: DiffLine[] | null = null;
     try {
-      const beforeReq: RequestData = JSON.parse(older.content!).request;
-      const afterReq: RequestData = JSON.parse(entry.content).request;
+      const beforeReq: RequestData = normalizeRequestData(JSON.parse(older.content!).request);
+      const afterReq: RequestData = normalizeRequestData(JSON.parse(entry.content).request);
       diffLines = diffRequestData(beforeReq, afterReq);
     } catch {
       diffLines = null;
@@ -136,6 +136,13 @@ export interface BranchRequestDiff {
   // diff, no breaking classification beyond "it was deleted") instead of
   // being run through HTTP-shaped logic that would crash on it.
   kind: "http" | "grpc";
+  // Both sides, kept around (modified entries only) so the UI can lazily
+  // fetch HEAD's content on expand and compute committed-vs-uncommitted
+  // tags on demand (see tagCommitted/BranchComparePanel) — the bulk fetch
+  // itself skips HEAD entirely (includeHead: false) to stay fast regardless
+  // of how many files changed.
+  beforeReq: RequestData | null;
+  afterReq: RequestData | null;
 }
 
 // The path is relative to the workspace root (with the storage-layer's
@@ -177,7 +184,7 @@ function describeBreaking(status: BranchRequestDiff["status"], before: RequestDa
 // present in base-vs-HEAD) or uncommitted (only appears once HEAD is
 // compared against the working tree) — matched by exact kind+category+text
 // since DiffLine carries no stable identity beyond its rendered content.
-function tagCommitted(diffLines: DiffLine[], beforeReq: RequestData, headReq: RequestData): DiffLine[] {
+export function tagCommitted(diffLines: DiffLine[], beforeReq: RequestData, headReq: RequestData): DiffLine[] {
   const committedLines = diffRequestData(beforeReq, headReq);
   const isCommitted = (l: DiffLine) => committedLines.some((c) => c.kind === l.kind && c.category === l.category && c.text === l.text);
   return diffLines.map((l) => ({ ...l, committed: isCommitted(l) }));
@@ -253,6 +260,8 @@ export function buildBranchDiffSummary(
         breakingReasons: isEntryBreaking ? ["This gRPC request was deleted — clients still calling it will fail."] : [],
         snapshot: null,
         kind: "grpc",
+        beforeReq: null,
+        afterReq: null,
       };
       if (entry.status === "added") added++;
       else if (entry.status === "removed") removed++;
@@ -261,13 +270,17 @@ export function buildBranchDiffSummary(
       continue;
     }
 
-    const beforeReq: RequestData | null = beforeParsed?.request ?? null;
-    const afterReq: RequestData | null = afterParsed?.request ?? null;
+    // Old commits can predate fields added to RequestData later (auth,
+    // examples, pathParams, ...) — normalize so a request from before the
+    // Auth tab existed doesn't crash SnapshotView/diffRequestData on a
+    // field that simply isn't in that historical snapshot.
+    const beforeReq: RequestData | null = beforeParsed?.request ? normalizeRequestData(beforeParsed.request) : null;
+    const afterReq: RequestData | null = afterParsed?.request ? normalizeRequestData(afterParsed.request) : null;
 
     let diffLines = beforeReq && afterReq ? diffRequestData(beforeReq, afterReq) : [];
     if (beforeReq && afterReq && entry.head) {
       try {
-        const headReq: RequestData = JSON.parse(entry.head).request;
+        const headReq: RequestData = normalizeRequestData(JSON.parse(entry.head).request);
         diffLines = tagCommitted(diffLines, beforeReq, headReq);
       } catch {
         // HEAD content unreadable/not applicable — leave lines untagged.
@@ -286,6 +299,8 @@ export function buildBranchDiffSummary(
       breaking: isEntryBreaking,
       breakingReasons: isEntryBreaking ? describeBreaking(entry.status, beforeReq, afterReq, diffLines) : [],
       snapshot: afterReq ?? beforeReq,
+      beforeReq,
+      afterReq,
     };
 
     if (entry.status === "added") added++;

@@ -9,8 +9,18 @@ use std::time::{Duration, Instant};
 pub async fn http_request(payload: HttpRequestPayload) -> Result<HttpResponsePayload, String> {
     // Default User-Agent so APIs that reject unidentified clients (e.g. GitHub's REST API)
     // work out of the box; a request-level `User-Agent` header below still overrides this.
+    let timeout = match payload.timeout_ms {
+        Some(ms) if ms > 0 => Duration::from_millis(ms),
+        _ => Duration::from_secs(60),
+    };
+    let redirect_policy = if !payload.follow_redirects {
+        reqwest::redirect::Policy::none()
+    } else {
+        reqwest::redirect::Policy::limited(payload.max_redirects.unwrap_or(10) as usize)
+    };
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
+        .timeout(timeout)
+        .redirect(redirect_policy)
         .user_agent(concat!("Relay/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())?;

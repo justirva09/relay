@@ -4,6 +4,10 @@ import { KVRow, newRow } from "../types";
 import { useTheme } from "../lib/theme";
 import { useLayout } from "../lib/layout";
 import SettingsModal from "./SettingsModal";
+import ScriptSafetyModal from "./ScriptSafetyModal";
+import ThemeModal from "./ThemeModal";
+import CookiesModal from "./CookiesModal";
+import { registerAction } from "../lib/keybindings";
 
 function EnvDropdown() {
   const { workspace, setActiveEnvironment } = useWorkspace();
@@ -66,10 +70,22 @@ function EnvDropdown() {
 export function EnvironmentBar({ onShowOverview }: { onShowOverview: () => void }) {
   const [showModal, setShowModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showScriptSafety, setShowScriptSafety] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
-  const { theme, toggleTheme } = useTheme();
+  const { isDark } = useTheme();
+  const [showThemeModal, setShowThemeModal] = useState(false);
+  const [showCookies, setShowCookies] = useState(false);
   const { responseLayout, setResponseLayout } = useLayout();
-  const { mockServerRunningPort, toggleMockServer } = useWorkspace();
+  const { mockServerRunningPort, toggleMockServer, envModalTarget, closeEnvironmentModal, safeMode } = useWorkspace();
+
+  // The {{variable}} click-to-navigate feature (RequestPanel/KeyValueEditor)
+  // has no direct handle on this component's local showModal state — it
+  // goes through envModalTarget in the store instead (see openEnvironmentModal).
+  useEffect(() => {
+    if (envModalTarget) setShowModal(true);
+  }, [envModalTarget]);
+
+  useEffect(() => registerAction("view.settings", () => setShowSettings(true)), []);
 
   const handleCopyMockUrl = () => {
     if (!mockServerRunningPort) return;
@@ -164,11 +180,11 @@ export function EnvironmentBar({ onShowOverview }: { onShowOverview: () => void 
         </button>
         <div className="w-px h-5 bg-th-border mx-0.5" />
         <button
-          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          onClick={toggleTheme}
+          title="Appearance & themes"
+          onClick={() => setShowThemeModal(true)}
           className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
         >
-          {theme === "dark" ? (
+          {isDark ? (
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="5" />
               <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
@@ -183,6 +199,31 @@ export function EnvironmentBar({ onShowOverview }: { onShowOverview: () => void 
           )}
         </button>
         <button
+          title={safeMode ? "Script Safety: Safe Mode (scripts sandboxed)" : "Script Safety: Developer Mode (scripts unsandboxed)"}
+          onClick={() => setShowScriptSafety(true)}
+          className={`h-6 w-6 grid place-items-center rounded ${
+            safeMode ? "text-emerald-400 hover:bg-emerald-400/10" : "text-amber-400 hover:bg-amber-400/10"
+          }`}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z" />
+            {safeMode && <polyline points="9 12 11 14 15 10" />}
+          </svg>
+        </button>
+        <button
+          title="Cookies"
+          onClick={() => setShowCookies(true)}
+          className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <circle cx="9" cy="9" r="1" fill="currentColor" stroke="none" />
+            <circle cx="14" cy="8" r="1" fill="currentColor" stroke="none" />
+            <circle cx="15" cy="13" r="1" fill="currentColor" stroke="none" />
+            <circle cx="10" cy="15" r="1" fill="currentColor" stroke="none" />
+          </svg>
+        </button>
+        <button
           title="Settings"
           onClick={() => setShowSettings(true)}
           className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
@@ -193,16 +234,51 @@ export function EnvironmentBar({ onShowOverview }: { onShowOverview: () => void 
           </svg>
         </button>
       </div>
-      {showModal && <EnvironmentModal onClose={() => setShowModal(false)} />}
+      {showScriptSafety && <ScriptSafetyModal onClose={() => setShowScriptSafety(false)} />}
+      {showModal && (
+        <EnvironmentModal
+          initialTab={envModalTarget?.tab}
+          highlightKey={envModalTarget?.key}
+          onClose={() => {
+            setShowModal(false);
+            closeEnvironmentModal();
+          }}
+        />
+      )}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showThemeModal && <ThemeModal onClose={() => setShowThemeModal(false)} />}
+      {showCookies && <CookiesModal onClose={() => setShowCookies(false)} />}
     </>
   );
 }
 
-function EnvironmentModal({ onClose }: { onClose: () => void }) {
+function EnvironmentModal({ onClose, initialTab, highlightKey }: { onClose: () => void; initialTab?: string; highlightKey?: string }) {
   const { workspace, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, setVariables } = useWorkspace();
-  const [tab, setTab] = useState<string | "globals">(workspace.activeEnvironmentId || "globals");
+  const [tab, setTab] = useState<string | "globals">(initialTab || workspace.activeEnvironmentId || "globals");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [flashedKey, setFlashedKey] = useState<string | null>(null);
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // Re-triggering click-to-navigate while the modal is already open (e.g.
+  // clicking a variable from a different environment) should still jump —
+  // initialTab alone only sets the state's first value.
+  useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab]);
+
+  // Scrolls to and briefly flashes the row for the variable that was
+  // ⌘/Ctrl-clicked — runs after the tab switch above so the row for the
+  // right scope is actually mounted by the time this looks for it.
+  useEffect(() => {
+    if (!highlightKey) return;
+    const el = rowRefs.current[highlightKey];
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setFlashedKey(highlightKey);
+    const t = setTimeout(() => setFlashedKey(null), 1600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightKey, tab]);
 
   const selectedEnv = tab !== "globals" ? workspace.environments.find((e) => e.id === tab) : null;
 
@@ -319,7 +395,13 @@ function EnvironmentModal({ onClose }: { onClose: () => void }) {
           <label className="text-[11px] font-mono text-th-text-3 mb-1.5 block">Variables</label>
           <div className="flex flex-col gap-1.5">
             {currentRows.map((r) => (
-              <div key={r.id} className="flex items-center gap-2">
+              <div
+                key={r.id}
+                ref={(el) => {
+                  rowRefs.current[r.key] = el;
+                }}
+                className={`flex items-center gap-2 rounded-md transition-colors ${flashedKey === r.key ? "ring-2 ring-th-accent-border bg-th-accent-bg" : ""}`}
+              >
                 <input
                   value={r.key}
                   onChange={(e) => handleRowChange(r.id, "key", e.target.value)}

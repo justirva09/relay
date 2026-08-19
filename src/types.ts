@@ -6,6 +6,7 @@ export interface KVRow {
   value: string;
   enabled: boolean;
   secret?: boolean;
+  description?: string;
 }
 
 export type BodyMode = "none" | "json" | "text" | "form-data" | "urlencoded";
@@ -20,16 +21,66 @@ export function newFormDataRow(): FormDataRow {
 
 // Discriminated union so later auth types (AWS SigV4, OAuth2) slot in as
 // more optional variant fields without restructuring existing requests.
-export type AuthType = "none" | "bearer" | "basic";
+export type AuthType = "none" | "bearer" | "basic" | "awsSigV4" | "oauth2";
+
+export interface AwsSigV4Config {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+  region: string;
+  service: string;
+}
+
+export interface OAuth2Config {
+  authUrl: string;
+  tokenUrl: string;
+  clientId: string;
+  clientSecret?: string;
+  scope?: string;
+  // Fixed loopback port used for the redirect_uri (http://127.0.0.1:<port>/callback)
+  // during the Authorization Code + PKCE flow — see lib/oauth2.ts.
+  redirectPort: number;
+  accessToken?: string;
+  refreshToken?: string;
+  // Epoch ms; undefined/0 means unknown expiry. No auto-refresh in v1 — the
+  // user re-runs "Get New Access Token" once it's stale.
+  expiresAt?: number;
+}
 
 export interface AuthConfig {
   type: AuthType;
   bearer?: { token: string };
   basic?: { username: string; password: string };
+  awsSigV4?: AwsSigV4Config;
+  oauth2?: OAuth2Config;
 }
 
 export function defaultAuth(): AuthConfig {
   return { type: "none" };
+}
+
+export function defaultAwsSigV4(): AwsSigV4Config {
+  return { accessKeyId: "", secretAccessKey: "", sessionToken: "", region: "us-east-1", service: "execute-api" };
+}
+
+// A single cookie captured from a Set-Cookie response header (or added
+// manually). Lives in a local-only jar (see lib/tauri.ts's loadCookieJar) —
+// never in the committed .relay files, same as Postman/Bruno keep their
+// cookie jars out of shared collections.
+export interface StoredCookie {
+  id: string;
+  domain: string;
+  path: string;
+  name: string;
+  value: string;
+  secure: boolean;
+  httpOnly: boolean;
+  // Epoch ms; undefined means a session cookie (no explicit expiry).
+  expires?: number;
+}
+
+export function defaultOAuth2(): OAuth2Config {
+  return { authUrl: "", tokenUrl: "", clientId: "", clientSecret: "", scope: "", redirectPort: 43287 };
 }
 
 // A saved response snapshot the mock server can serve back — the same data
@@ -54,6 +105,19 @@ export interface Example {
   scenarioKey?: string;
 }
 
+export interface RequestSettings {
+  encodeUrl: boolean;
+  followRedirects: boolean;
+  maxRedirects: number;
+  // 0 means "use Relay's default timeout" — reqwest always needs some finite
+  // timeout, there's no true "wait forever" option to map a literal 0 onto.
+  timeoutMs: number;
+}
+
+export function defaultRequestSettings(): RequestSettings {
+  return { encodeUrl: true, followRedirects: true, maxRedirects: 5, timeoutMs: 0 };
+}
+
 export interface RequestData {
   method: Method;
   url: string;
@@ -69,6 +133,8 @@ export interface RequestData {
   preScript: string;
   testScript: string;
   examples: Example[];
+  tags: string[];
+  settings: RequestSettings;
 }
 
 export type GrpcMethodType = "unary" | "server-stream" | "client-stream" | "bidi";
@@ -200,7 +266,7 @@ export const uid = () =>
   (crypto as any).randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 export function newRow(): KVRow {
-  return { id: uid(), key: "", value: "", enabled: true };
+  return { id: uid(), key: "", value: "", enabled: true, description: "" };
 }
 
 export function parseQueryToRows(fullUrl: string, existingRows?: KVRow[]): KVRow[] {
@@ -251,6 +317,8 @@ export function normalizeRequestData(req: any): RequestData {
     description: typeof req.description === "string" ? req.description : "",
     auth: req.auth && typeof req.auth === "object" ? req.auth : defaultAuth(),
     examples: Array.isArray(req.examples) ? req.examples : [],
+    tags: Array.isArray(req.tags) ? req.tags : [],
+    settings: req.settings && typeof req.settings === "object" ? { ...defaultRequestSettings(), ...req.settings } : defaultRequestSettings(),
   };
 }
 
@@ -268,12 +336,12 @@ export function encodeUrlencodedRows(rows: KVRow[]): string {
     .join("&");
 }
 
-export function buildUrlFromParams(fullUrl: string, rows: KVRow[]): string {
+export function buildUrlFromParams(fullUrl: string, rows: KVRow[], encode = true): string {
   const qIndex = fullUrl.indexOf("?");
   const base = qIndex === -1 ? fullUrl : fullUrl.slice(0, qIndex);
   const qs = rows
     .filter((r) => r.enabled && r.key.trim())
-    .map((r) => `${encodeURIComponent(r.key)}=${encodeURIComponent(r.value)}`)
+    .map((r) => (encode ? `${encodeURIComponent(r.key)}=${encodeURIComponent(r.value)}` : `${r.key}=${r.value}`))
     .join("&");
   return qs ? `${base}?${qs}` : base;
 }
@@ -294,6 +362,8 @@ export function defaultRequest(method: Method = "GET", url = ""): RequestData {
     preScript: "",
     testScript: "",
     examples: [],
+    tags: [],
+    settings: defaultRequestSettings(),
   };
 }
 

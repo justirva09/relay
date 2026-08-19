@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useWorkspace } from "../store";
-import { gitListBranches, gitBranchDiff, gitStatus } from "../lib/tauri";
-import { buildBranchDiffSummary, BranchDiffSummary, BranchRequestDiff, DiffCategory, DiffLine } from "../lib/apiDiff";
+import { gitListBranches, gitBranchDiff, gitShowAtRef, gitStatus } from "../lib/tauri";
+import { buildBranchDiffSummary, tagCommitted, BranchDiffSummary, BranchRequestDiff, DiffCategory, DiffLine } from "../lib/apiDiff";
+import { normalizeRequestData } from "../types";
 import SimpleSelect from "./SimpleSelect";
 
 const DIFF_COLOR: Record<DiffLine["kind"], string> = {
@@ -128,21 +129,51 @@ function EntryCard({
   filter,
   expanded,
   onToggle,
+  workspaceDir,
+  canTagCommitted,
 }: {
   entry: BranchRequestDiff;
   filter: DiffCategory | "all";
   expanded: boolean;
   onToggle: () => void;
+  workspaceDir: string | null;
+  // Mirrors Rust's include_head condition (working-tree mode only — a
+  // straight branch-vs-branch compare has no "uncommitted" concept at all).
+  canTagCommitted: boolean;
 }) {
+  // Lazily fetched only once this card is actually expanded — see
+  // includeHead: false in refreshDiff and git_show_at_ref on the Rust side.
+  const [taggedLines, setTaggedLines] = useState<DiffLine[] | null>(null);
+
+  useEffect(() => {
+    if (!expanded || !canTagCommitted || !workspaceDir || taggedLines) return;
+    if (entry.kind !== "http" || entry.status !== "modified" || !entry.beforeReq || !entry.afterReq) return;
+    let cancelled = false;
+    gitShowAtRef(workspaceDir, "HEAD", entry.path).then((head) => {
+      if (cancelled || !head) return;
+      try {
+        const headReq = normalizeRequestData(JSON.parse(head).request);
+        setTaggedLines(tagCommitted(entry.diffLines, entry.beforeReq!, headReq));
+      } catch {
+        // HEAD content unreadable/not applicable — leave lines untagged.
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, canTagCommitted, workspaceDir, entry, taggedLines]);
+
+  const diffLines = taggedLines ?? entry.diffLines;
+
   const grouped = useMemo(() => {
     const groups: { category: DiffCategory; lines: DiffLine[] }[] = [];
     for (const cat of CATEGORY_ORDER) {
       if (filter !== "all" && filter !== cat) continue;
-      const lines = entry.diffLines.filter((l) => l.category === cat);
+      const lines = diffLines.filter((l) => l.category === cat);
       if (lines.length) groups.push({ category: cat, lines });
     }
     return groups;
-  }, [entry.diffLines, filter]);
+  }, [diffLines, filter]);
 
   return (
     <div className={`border rounded-lg bg-th-surface overflow-hidden shrink-0 ${entry.breaking ? "border-rose-400/40" : "border-th-border"}`}>
@@ -243,7 +274,11 @@ export default function BranchComparePanel({ onClose }: { onClose: () => void })
     setLoading(true);
     setError(null);
     const compareArg = compare === currentBranch ? null : compare;
-    gitBranchDiff(workspaceDir, base, compareArg)
+    // includeHead: false — the committed-vs-uncommitted tag is fetched
+    // lazily per entry on expand instead (see EntryCard), so opening this
+    // panel doesn't pay one extra `git show HEAD:path` per changed file
+    // upfront regardless of how many files differ.
+    gitBranchDiff(workspaceDir, base, compareArg, false)
       .then((entries) => setSummary(buildBranchDiffSummary(entries)))
       .catch((e) => setError(e?.message || String(e)))
       .finally(() => setLoading(false));
@@ -433,7 +468,15 @@ export default function BranchComparePanel({ onClose }: { onClose: () => void })
                     {!collapsed && (
                       <div className="flex flex-col gap-2 mt-2">
                         {entries.map((e) => (
-                          <EntryCard key={e.path} entry={e} filter={filter} expanded={expanded.has(e.path)} onToggle={() => toggleCard(e.path)} />
+                          <EntryCard
+                            key={e.path}
+                            entry={e}
+                            filter={filter}
+                            expanded={expanded.has(e.path)}
+                            onToggle={() => toggleCard(e.path)}
+                            workspaceDir={workspaceDir}
+                            canTagCommitted={compare === currentBranch}
+                          />
                         ))}
                       </div>
                     )}

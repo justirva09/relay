@@ -15,7 +15,11 @@ import { pickProtoFolder, listProtoFilesInDir } from "./lib/tauri";
 import VersionGate from "./components/VersionGate";
 import { uid, nameExample } from "./types";
 import TreePickerModal from "./components/TreePickerModal";
+import WelcomeModal from "./components/WelcomeModal";
+import Footer from "./components/Footer";
 import { TreeNode } from "./types";
+import { registerAction, runAction, getEffectiveCombo, comboFromEvent, KEYBINDING_DEFS, getActiveSearchRegion } from "./lib/keybindings";
+import { getLicenseState, refreshLicense } from "./lib/license";
 
 function UnsavedModal() {
   const { pendingCloseId, confirmCloseTab, workspace } = useWorkspace();
@@ -81,7 +85,7 @@ function findFolderName(nodes: TreeNode[], id: string): string | null {
 
 // Renders the import/export request picker and its result toast globally,
 // since import can be triggered either from Settings (whole-collection) or
-// from the Sidebar's per-folder "Import Here..." menu.
+// from the Sidebar's per-folder "Import Here" menu.
 function ImportExportModals() {
   const { workspace, pendingImport, confirmImport, cancelImport, pendingExport, confirmExport, cancelExport, importError, dismissImportError } = useWorkspace();
   const [toast, setToast] = useState<string | null>(null);
@@ -263,10 +267,19 @@ function WorkspaceFolderBanner() {
 }
 
 function Main() {
-  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, setProtoLibrary, compareOpen, closeCompare } = useWorkspace();
+  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, setProtoLibrary, compareOpen, closeCompare, openCompare, closeTab, closeAllTabs, setActiveTab } = useWorkspace();
   const activeTab = tabs.find((t) => t.nodeId === activeTabId) || null;
   const { responseLayout } = useLayout();
   const [showOverview, setShowOverview] = useState(false);
+
+  // Opportunistic refresh — if a session is already cached from a previous
+  // run, re-check entitlement on launch instead of only ever trusting
+  // whatever was last verified (could be a lapsed subscription by now).
+  // Failure here just leaves the last verified license in place (see
+  // refreshLicense's own comment) rather than blocking startup on it.
+  useEffect(() => {
+    if (getLicenseState().session) refreshLicense();
+  }, []);
 
   // openTick bumps on every openTab() call, even re-clicking the tab that's
   // already active — activeTabId alone wouldn't change in that case, leaving
@@ -303,16 +316,64 @@ function Main() {
   const [resizingHeight, setResizingHeight] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Registers this component's own action handlers — other components
+  // (Sidebar, EnvironmentBar) register theirs independently wherever their
+  // relevant state actually lives; see keybindings.ts's registry.
+  useEffect(() => {
+    const unregisters = [
+      registerAction("tab.save", () => activeTabId && saveTab(activeTabId)),
+      registerAction("tab.saveAll", () => tabs.forEach((t) => saveTab(t.nodeId))),
+      registerAction("tab.close", () => activeTabId && closeTab(activeTabId)),
+      registerAction("tab.closeAll", () => closeAllTabs()),
+      registerAction("tab.next", () => {
+        if (!tabs.length) return;
+        const i = tabs.findIndex((t) => t.nodeId === activeTabId);
+        setActiveTab(tabs[(i + 1) % tabs.length].nodeId);
+      }),
+      registerAction("tab.previous", () => {
+        if (!tabs.length) return;
+        const i = tabs.findIndex((t) => t.nodeId === activeTabId);
+        setActiveTab(tabs[(i - 1 + tabs.length) % tabs.length].nodeId);
+      }),
+      registerAction("request.send", () => {
+        if (!activeTab) return;
+        if (activeTab.kind === "grpc") sendGrpcTab(activeTab.nodeId);
+        else sendTab(activeTab.nodeId);
+      }),
+      registerAction("view.compareBranches", () => openCompare()),
+    ];
+    return () => unregisters.forEach((u) => u());
+  }, [activeTabId, tabs, activeTab, saveTab, closeTab, closeAllTabs, setActiveTab, sendTab, sendGrpcTab, openCompare]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        if (activeTabId) saveTab(activeTabId);
+      const el = e.target as HTMLElement | null;
+      const typing = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+      const combo = comboFromEvent(e);
+      if (!combo) return;
+      // request.send (mod+enter) is deliberately allowed while typing — it's
+      // the whole point of the shortcut, used constantly from inside the
+      // URL bar/body editor. Everything else stays disabled while typing so
+      // e.g. plain letters bound to an action don't fire while filling a form.
+      const allowWhileTyping = combo === getEffectiveCombo("request.send");
+      if (typing && !allowWhileTyping) return;
+      for (const def of KEYBINDING_DEFS) {
+        if (combo !== getEffectiveCombo(def.id)) continue;
+        // "Search" means the response pane's own search when that's the
+        // pane you were last in — see keybindings.ts's activeSearchRegion.
+        if (def.id === "sidebar.search" && getActiveSearchRegion() === "response" && runAction("response.search")) {
+          e.preventDefault();
+          return;
+        }
+        if (runAction(def.id)) {
+          e.preventDefault();
+          return;
+        }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeTabId, saveTab]);
+  }, []);
 
   useEffect(() => {
     if (!resizingWidth) return;
@@ -442,7 +503,8 @@ function Main() {
   };
 
   return (
-    <div className="flex h-screen w-screen bg-th-bg text-th-text-1 font-sans overflow-hidden">
+    <div className="flex flex-col h-screen w-screen bg-th-bg text-th-text-1 font-sans overflow-hidden">
+    <div className="flex-1 flex min-h-0">
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0">
         <WorkspaceFolderBanner />
@@ -487,6 +549,9 @@ function Main() {
       <UnsavedModal />
       <WorkspaceSetupModal />
       <ImportExportModals />
+      <WelcomeModal />
+    </div>
+    <Footer />
     </div>
   );
 }

@@ -25,6 +25,7 @@ bytes = "1"
 http = "1"
 protox = "0.9.1"
 axum = "0.7"
+sysinfo = "0.32"
 
 [profile.release]
 panic = "abort"

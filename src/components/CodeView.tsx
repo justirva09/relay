@@ -88,6 +88,7 @@ export default function CodeView({ value, className = "" }: Props) {
     rows.push(
       <div key={lineIndex} className="flex">
         <div
+          data-no-search
           className="shrink-0 select-none flex items-center text-[12.5px] font-mono leading-[1.6] text-th-text-4 border-r border-th-border bg-th-bg/40"
           style={{ width: `${gutterWidth}ch` }}
         >
@@ -102,7 +103,7 @@ export default function CodeView({ value, className = "" }: Props) {
           <span className="flex-1 text-right pr-3">{lineIndex + 1}</span>
         </div>
         <div
-          className="flex-1 min-w-0 px-3 text-[12.5px] font-mono leading-[1.6] text-th-text-1 whitespace-pre select-text"
+          className="flex-1 min-w-0 px-3 text-[12.5px] font-mono leading-[1.6] text-th-text-1 whitespace-pre-wrap break-words select-text"
           dangerouslySetInnerHTML={{ __html: lineHtml }}
         />
       </div>

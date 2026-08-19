@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from "react";
 import { TreeNode } from "../types";
 import { useWorkspace } from "../store";
 import GitPanel from "./GitPanel";
+import CurlImportModal from "./CurlImportModal";
+import { registerAction, setActiveSearchRegion } from "../lib/keybindings";
 
 export const METHOD_COLOR: Record<string, string> = {
   GET: "text-emerald-400",
@@ -32,10 +34,11 @@ interface CtxMenuState {
   kind: "folder" | "request" | "grpc";
 }
 
-function AddRequestDropdown({ title, onAddHttp, onAddGrpc, className }: {
+function AddRequestDropdown({ title, onAddHttp, onAddGrpc, onAddFromCurl, className }: {
   title: string;
   onAddHttp: () => void;
   onAddGrpc: () => void;
+  onAddFromCurl: () => void;
   className: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -68,6 +71,13 @@ function AddRequestDropdown({ title, onAddHttp, onAddGrpc, className }: {
             className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
           >
             gRPC Request
+          </button>
+          <div className="my-1 border-t border-th-border" />
+          <button
+            onClick={(e) => { e.stopPropagation(); onAddFromCurl(); setOpen(false); }}
+            className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+          >
+            From cURL
           </button>
         </div>
       )}
@@ -113,7 +123,7 @@ function filterTree(nodes: TreeNode[], query: string): TreeNode[] {
 
 let suppressNextClick = false;
 
-function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onDelete, draggingIds, dropInfo, selectedIds, onItemMouseDown, onItemClick }: {
+function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onDelete, draggingIds, dropInfo, selectedIds, onItemMouseDown, onItemClick, onAddFromCurl }: {
   node: TreeNode;
   depth: number;
   onCtxMenu: (e: React.MouseEvent, node: TreeNode) => void;
@@ -125,6 +135,7 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
   selectedIds: Set<string>;
   onItemMouseDown: (nodeId: string, e: React.MouseEvent) => void;
   onItemClick: (nodeId: string, e: React.MouseEvent) => boolean;
+  onAddFromCurl: (parentId: string) => void;
 }) {
   const { addFolder, addRequest, addGrpcRequest, renameNode, toggleCollapse, openTab, activeTabId, tabs } = useWorkspace();
   const [editing, setEditing] = useState(false);
@@ -204,6 +215,7 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
                 title="New request"
                 onAddHttp={() => addRequest(node.id)}
                 onAddGrpc={() => addGrpcRequest(node.id)}
+                onAddFromCurl={() => onAddFromCurl(node.id)}
                 className="h-5 w-5 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
               />
               <button
@@ -231,7 +243,7 @@ function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onD
               </div>
             )}
             {node.children.map((c) => (
-              <TreeItem key={c.id} node={c} depth={depth + 1} onCtxMenu={onCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={clearTriggerEdit} onDelete={onDelete} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={onItemMouseDown} onItemClick={onItemClick} />
+              <TreeItem key={c.id} node={c} depth={depth + 1} onCtxMenu={onCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={clearTriggerEdit} onDelete={onDelete} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={onItemMouseDown} onItemClick={onItemClick} onAddFromCurl={onAddFromCurl} />
             ))}
           </div>
         )}
@@ -368,7 +380,7 @@ const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 260;
 
 export default function Sidebar() {
-  const { workspace, addFolder, addRequest, addGrpcRequest, duplicateNode, deleteNodes, moveNodes, renameWorkspace, collapseAllFolders, importIntoFolder } = useWorkspace();
+  const { workspace, addFolder, addRequest, addGrpcRequest, duplicateNode, deleteNodes, moveNodes, renameWorkspace, collapseAllFolders, importIntoFolder, openTab, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport } = useWorkspace();
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [triggerEditId, setTriggerEditId] = useState<string | null>(null);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
@@ -385,6 +397,22 @@ export default function Sidebar() {
   });
   const [resizing, setResizing] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const unregisters = [
+      registerAction("request.new", () => {
+        const id = addRequest(null);
+        openTab(id);
+      }),
+      registerAction("request.newFolder", () => addFolder(null)),
+      registerAction("sidebar.search", () => searchInputRef.current?.focus()),
+      registerAction("sidebar.duplicate", () => {
+        if (selectedIds.size === 1) duplicateNode([...selectedIds][0]);
+      }),
+    ];
+    return () => unregisters.forEach((u) => u());
+  }, [addRequest, addFolder, openTab, duplicateNode, selectedIds]);
 
   useEffect(() => {
     if (!resizing) return;
@@ -559,7 +587,11 @@ export default function Sidebar() {
   };
 
   return (
-    <div className="relative shrink-0 border-r border-th-border bg-th-sidebar flex flex-col h-full" style={{ width }}>
+    <div
+      className="relative shrink-0 border-r border-th-border bg-th-sidebar flex flex-col h-full"
+      style={{ width }}
+      onMouseEnter={() => setActiveSearchRegion("sidebar")}
+    >
       <div className="h-[49px] px-3 flex items-center justify-between border-b border-th-border shrink-0">
         <div className="flex items-center gap-1.5 min-w-0">
           {editingTitle ? (
@@ -595,6 +627,7 @@ export default function Sidebar() {
               const id = addGrpcRequest(null);
               if (id) setTimeout(() => setTriggerEditId(id), 50);
             }}
+            onAddFromCurl={() => openCurlImport(null)}
             className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg text-[13px]"
           />
           <button
@@ -627,6 +660,7 @@ export default function Sidebar() {
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
           <input
+            ref={searchInputRef}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search requests…"
@@ -654,7 +688,7 @@ export default function Sidebar() {
           </div>
         )}
         {displayTree.map((n) => (
-          <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteIds([id])} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={handleItemMouseDown} onItemClick={handleItemClick} />
+          <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteIds([id])} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={handleItemMouseDown} onItemClick={handleItemClick} onAddFromCurl={openCurlImport} />
         ))}
       </div>
 
@@ -711,6 +745,15 @@ export default function Sidebar() {
                   </button>
                   <button
                     onClick={() => {
+                      openCurlImport(ctxMenu.nodeId);
+                      setCtxMenu(null);
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+                  >
+                    New Request From cURL
+                  </button>
+                  <button
+                    onClick={() => {
                       const id = addFolder(ctxMenu.nodeId);
                       setCtxMenu(null);
                       if (id) setTimeout(() => setTriggerEditId(id), 50);
@@ -727,7 +770,7 @@ export default function Sidebar() {
                     }}
                     className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
                   >
-                    Import Here...
+                    Import Here
                   </button>
                   <div className="my-1 border-t border-th-border" />
                 </>
@@ -795,6 +838,17 @@ export default function Sidebar() {
             </div>
           </div>
         </div>
+      )}
+
+      {curlImportOpen && (
+        <CurlImportModal
+          onClose={closeCurlImport}
+          onCreate={(name, request) => {
+            const id = addRequest(curlImportParentId, { name, request });
+            closeCurlImport();
+            if (id) openTab(id);
+          }}
+        />
       )}
 
       <div

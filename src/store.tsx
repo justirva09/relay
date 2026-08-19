@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Environment, FolderNode, GrpcLogEntry, GrpcRequestData, GrpcRequestNode, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, RequestNode, ResponseState, TabState, TreeNode, Workspace, defaultGrpcRequest, defaultRequest, demoWorkspace, newRow, normalizeRequestData, uid } from "./types";
-import { loadWorkspaceFile, pickCollectionFile, pickSavePath, readFileAtPath, writeFileAtPath, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles, loadResponseCache, saveResponseCache, startMockServer as startMockServerTauri, stopMockServer as stopMockServerTauri, mockServerStatus as mockServerStatusTauri } from "./lib/tauri";
+import { Environment, FolderNode, GrpcLogEntry, GrpcRequestData, GrpcRequestNode, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, RequestNode, ResponseState, StoredCookie, TabState, TreeNode, Workspace, defaultGrpcRequest, defaultRequest, demoWorkspace, newRow, normalizeRequestData, uid } from "./types";
+import { loadWorkspaceFile, pickCollectionFile, pickSavePath, readFileAtPath, writeFileAtPath, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles, loadResponseCache, saveResponseCache, loadCookieJar, saveCookieJar, startMockServer as startMockServerTauri, stopMockServer as stopMockServerTauri, mockServerStatus as mockServerStatusTauri } from "./lib/tauri";
 import { runRequest } from "./lib/useSendRequest";
 import { isPostmanCollection, isRelayWorkspace, postmanToTree, treeToPostman } from "./lib/postman";
 import { isOpenApiSpec, parseOpenApiSpec, parseCollectionFile } from "./lib/openapi";
@@ -26,6 +26,16 @@ interface Ctx {
   setMockServerPort: (port: number) => void;
   mockServerRunningPort: number | null;
   mockServerError: string | null;
+  // Local-only trust decision (see safeModeKey) — when true, pre-request and
+  // test scripts run inside scriptSandbox.ts's isolated iframe instead of
+  // this page's own JS context, so a script from an imported collection
+  // can't reach window.__TAURI_INTERNALS__ (filesystem, git, etc).
+  safeMode: boolean;
+  setSafeMode: (on: boolean) => void;
+  // Local-only cookie jar (see lib/cookies.ts) — never part of the .relay
+  // files, same as Postman/Bruno keep cookies out of shared collections.
+  cookies: StoredCookie[];
+  setCookies: (cookies: StoredCookie[]) => void;
   toggleMockServer: () => Promise<void>;
   tabs: TabState[];
   activeTabId: string | null;
@@ -35,7 +45,7 @@ interface Ctx {
   // overview screen) needs a signal that fires regardless.
   openTick: number;
   addFolder: (parentId: string | null) => string;
-  addRequest: (parentId: string | null) => string;
+  addRequest: (parentId: string | null, preset?: { name: string; request: RequestData }) => string;
   renameNode: (id: string, name: string) => void;
   deleteNode: (id: string) => void;
   deleteNodes: (ids: string[]) => void;
@@ -71,6 +81,21 @@ interface Ctx {
   compareOpen: boolean;
   openCompare: () => void;
   closeCompare: () => void;
+  // Set to force the Environments modal open on a specific tab ("globals"
+  // or an environment id), optionally scrolling to and flashing one
+  // variable row — used by the {{variable}} click-to-navigate feature,
+  // which lives in RequestPanel/KeyValueEditor, far from EnvironmentBar
+  // (which otherwise owns the modal's open state entirely locally).
+  envModalTarget: { tab: string; key?: string } | null;
+  openEnvironmentModal: (tab: string, key?: string) => void;
+  closeEnvironmentModal: () => void;
+  // Lifted out of Sidebar (which owns the "From cURL" entry points in the
+  // tree) so the first-run Welcome modal — rendered from App.tsx, nowhere
+  // near Sidebar — can trigger the same import flow.
+  curlImportOpen: boolean;
+  curlImportParentId: string | null;
+  openCurlImport: (parentId: string | null) => void;
+  closeCurlImport: () => void;
   pauseAutosave: () => void;
   resumeAutosave: () => void;
   moveNodes: (nodeIds: string[], targetId: string, position: "before" | "after" | "inside") => void;
@@ -156,6 +181,18 @@ function basenameFromPath(path: string): string {
 
 const RESPONSE_CACHE_SETTING_KEY = "relay-save-responses";
 const MOCK_SERVER_PORT_KEY = "relay-mock-server-port";
+const SAFE_MODE_KEY_PREFIX = "relay-safe-mode:";
+
+// Deliberately keyed by workspace dir and stored ONLY in localStorage — never
+// inside the workspace's own committed files. This is a local trust decision
+// about scripts from a collection someone else authored; if it were stored
+// in the workspace itself, the collection's author could just ship
+// safeMode: false in the file and silently disable the protection for
+// everyone who opens it. Defaults to Safe Mode ON for every workspace,
+// including one with no dir yet (the in-memory/demo case).
+function safeModeKey(dir: string | null): string {
+  return SAFE_MODE_KEY_PREFIX + (dir || "__no_dir__");
+}
 
 type CachedResponse =
   | { kind: "http"; response: ResponseState }
@@ -174,11 +211,16 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [pendingImport, setPendingImport] = useState<{ tree: TreeNode[]; variables: KVRow[]; targetFolderId?: string } | null>(null);
   const [pendingExport, setPendingExport] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [envModalTarget, setEnvModalTarget] = useState<{ tab: string; key?: string } | null>(null);
+  const [curlImportOpen, setCurlImportOpen] = useState(false);
+  const [curlImportParentId, setCurlImportParentId] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [responseCacheEnabled, setResponseCacheEnabledState] = useState(() => localStorage.getItem(RESPONSE_CACHE_SETTING_KEY) !== "false");
   const [mockServerPort, setMockServerPort] = useState<number>(() => Number(localStorage.getItem(MOCK_SERVER_PORT_KEY)) || 4010);
   const [mockServerRunningPort, setMockServerRunningPort] = useState<number | null>(null);
   const [mockServerError, setMockServerError] = useState<string | null>(null);
+  const [safeMode, setSafeModeState] = useState<boolean>(() => localStorage.getItem(safeModeKey(null)) !== "false");
+  const [cookies, setCookies] = useState<StoredCookie[]>([]);
   const loaded = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveArgsRef = useRef<{ dir: string; data: string; hidden: boolean } | null>(null);
@@ -190,6 +232,39 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(RESPONSE_CACHE_SETTING_KEY, String(on));
     setResponseCacheEnabledState(on);
   }, []);
+
+  // Reloads this specific workspace's own Safe Mode preference whenever the
+  // open workspace changes — each workspace dir gets an independent local
+  // trust decision, not a single global toggle that'd otherwise leak
+  // whatever was last set into a workspace opened later.
+  useEffect(() => {
+    setSafeModeState(localStorage.getItem(safeModeKey(workspaceDir)) !== "false");
+  }, [workspaceDir]);
+
+  // Local-only cookie jar (see lib/cookies.ts) — loaded per workspace dir,
+  // never part of the .relay files themselves.
+  useEffect(() => {
+    if (!workspaceDir) {
+      setCookies([]);
+      return;
+    }
+    loadCookieJar(workspaceDir)
+      .then((raw) => setCookies(JSON.parse(raw)))
+      .catch(() => setCookies([]));
+  }, [workspaceDir]);
+
+  useEffect(() => {
+    if (!workspaceDir) return;
+    saveCookieJar(workspaceDir, JSON.stringify(cookies)).catch(() => {});
+  }, [cookies, workspaceDir]);
+
+  const setSafeMode = useCallback(
+    (on: boolean) => {
+      localStorage.setItem(safeModeKey(workspaceDir), String(on));
+      setSafeModeState(on);
+    },
+    [workspaceDir]
+  );
 
   const setMockServerPortPersisted = useCallback((port: number) => {
     localStorage.setItem(MOCK_SERVER_PORT_KEY, String(port));
@@ -380,8 +455,13 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     return node.id;
   }, []);
 
-  const addRequest = useCallback((parentId: string | null) => {
-    const node: RequestNode = { id: uid(), kind: "request", name: "New Request", request: defaultRequest("GET", "") };
+  const addRequest = useCallback((parentId: string | null, preset?: { name: string; request: RequestData }) => {
+    const node: RequestNode = {
+      id: uid(),
+      kind: "request",
+      name: preset?.name || "New Request",
+      request: preset?.request ?? defaultRequest("GET", ""),
+    };
     setWorkspace((ws) => ({ ...ws, tree: insertAt(ws.tree, parentId, node) }));
     return node.id;
   }, []);
@@ -742,6 +822,13 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const openCompare = useCallback(() => setCompareOpen(true), []);
   const closeCompare = useCallback(() => setCompareOpen(false), []);
+  const openEnvironmentModal = useCallback((tab: string, key?: string) => setEnvModalTarget({ tab, key }), []);
+  const closeEnvironmentModal = useCallback(() => setEnvModalTarget(null), []);
+  const openCurlImport = useCallback((parentId: string | null) => {
+    setCurlImportParentId(parentId);
+    setCurlImportOpen(true);
+  }, []);
+  const closeCurlImport = useCallback(() => setCurlImportOpen(false), []);
 
   const confirmExport = useCallback(
     async (selectedIds: Set<string>): Promise<{ skippedGrpcCount: number } | null> => {
@@ -806,14 +893,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           else merged.push(v);
         }
       }
-      const result = await runRequest(tab.draft, merged, applyVariableChanges);
+      const result = await runRequest(tab.draft, merged, applyVariableChanges, { safeMode, cookies, onCookiesChange: setCookies });
       setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "http" ? { ...x, loading: false, response: result } : x)));
       if (responseCacheEnabled && workspaceDir) {
         responseCacheRef.current[id] = { kind: "http", response: result };
         persistResponseCache(workspaceDir);
       }
     },
-    [tabs, workspace.variables, workspace.environments, workspace.activeEnvironmentId, applyVariableChanges, responseCacheEnabled, workspaceDir, persistResponseCache]
+    [tabs, workspace.variables, workspace.environments, workspace.activeEnvironmentId, applyVariableChanges, responseCacheEnabled, workspaceDir, persistResponseCache, safeMode, cookies]
   );
 
   const cacheGrpcResponse = useCallback(
@@ -914,6 +1001,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       mockServerRunningPort,
       mockServerError,
       toggleMockServer,
+      safeMode,
+      setSafeMode,
+      cookies,
+      setCookies,
       tabs,
       activeTabId,
       openTick,
@@ -958,12 +1049,19 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       compareOpen,
       openCompare,
       closeCompare,
+      envModalTarget,
+      openEnvironmentModal,
+      closeEnvironmentModal,
+      curlImportOpen,
+      curlImportParentId,
+      openCurlImport,
+      closeCurlImport,
       pauseAutosave,
       resumeAutosave,
       moveNodes,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPortPersisted, mockServerRunningPort, mockServerError, toggleMockServer, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPortPersisted, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

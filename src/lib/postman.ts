@@ -1,4 +1,4 @@
-import { TreeNode, FolderNode, RequestNode, KVRow, Method, BodyMode, FormDataRow, AuthConfig, defaultAuth, defaultRequest, newRow, newFormDataRow, uid, parseQueryToRows, parsePathParamsFromUrl } from "../types";
+import { TreeNode, FolderNode, RequestNode, KVRow, Method, BodyMode, FormDataRow, AuthConfig, defaultAuth, defaultRequest, defaultRequestSettings, newRow, newFormDataRow, uid, parseQueryToRows, parsePathParamsFromUrl } from "../types";
 
 const POSTMAN_SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
 
@@ -201,6 +201,8 @@ function parsePostmanItem(item: PostmanItem): TreeNode {
       preScript: "",
       testScript: "",
       examples: [],
+      tags: [],
+      settings: defaultRequestSettings(),
     },
   };
   return node;

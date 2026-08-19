@@ -195,17 +195,20 @@ export function parseOpenApiSpec(spec: any): { tree: TreeNode[]; name: string; v
 
       const queryRows: KVRow[] = allParams
         .filter((p) => p.in === "query")
-        .map((p) => ({ id: uid(), key: p.name, value: paramDefaultValue(p, spec), enabled: true }));
+        .map((p) => ({ id: uid(), key: p.name, value: paramDefaultValue(p, spec), enabled: true, description: p.description || "" }));
       const headerRows: KVRow[] = allParams
         .filter((p) => p.in === "header")
-        .map((p) => ({ id: uid(), key: p.name, value: paramDefaultValue(p, spec), enabled: true }));
+        .map((p) => ({ id: uid(), key: p.name, value: paramDefaultValue(p, spec), enabled: true, description: p.description || "" }));
       if (auth.header) headerRows.push({ id: uid(), key: auth.header[0], value: auth.header[1], enabled: true });
       if (headerRows.length === 0) headerRows.push(newRow());
 
       const pathParamRows = parsePathParamsFromUrl(convertedPath);
       for (const p of allParams.filter((p) => p.in === "path")) {
         const row = pathParamRows.find((r) => r.key === p.name);
-        if (row) row.value = paramDefaultValue(p, spec);
+        if (row) {
+          row.value = paramDefaultValue(p, spec);
+          row.description = p.description || "";
+        }
       }
 
       const body = requestBodyFor(operation, spec);

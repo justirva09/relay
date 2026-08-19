@@ -21,7 +21,7 @@ function StatusChip({ response }: { response: ResponseState | null }) {
 // here touches the draft, the tab's saved response, or any variable/
 // environment — see useSendRequest.ts's overrideOrigin/mergedVariables.
 export default function ContractCheckModal({ draft, mockPort, onClose }: { draft: RequestData; mockPort: number; onClose: () => void }) {
-  const { workspace } = useWorkspace();
+  const { workspace, safeMode } = useWorkspace();
   const [mock, setMock] = useState<ResponseState | null>(null);
   const [real, setReal] = useState<ResponseState | null>(null);
 
@@ -29,8 +29,8 @@ export default function ContractCheckModal({ draft, mockPort, onClose }: { draft
     let cancelled = false;
     const variables = mergedVariables(workspace);
     const noop = () => {};
-    runRequest(draft, variables, noop, `http://127.0.0.1:${mockPort}`).then((r) => !cancelled && setMock(r));
-    runRequest(draft, variables, noop).then((r) => !cancelled && setReal(r));
+    runRequest(draft, variables, noop, { overrideOrigin: `http://127.0.0.1:${mockPort}`, safeMode }).then((r) => !cancelled && setMock(r));
+    runRequest(draft, variables, noop, { safeMode }).then((r) => !cancelled && setReal(r));
     return () => {
       cancelled = true;
     };

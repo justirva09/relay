@@ -2,10 +2,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod cookie_jar;
 mod git;
 mod grpc;
 mod mock_server;
 mod models;
+mod oauth;
+mod perf;
 mod response_cache;
 mod storage;
 mod version_check;
@@ -15,6 +18,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(mock_server::MockServerState::default())
+        .manage(perf::PerfState::default())
         .invoke_handler(tauri::generate_handler![
             commands::http_request,
             storage::load_workspace,
@@ -33,6 +37,7 @@ fn main() {
             git::git_history_for_node,
             git::git_list_branches,
             git::git_branch_diff,
+            git::git_show_at_ref,
             git::git_add,
             git::git_commit_staged,
             response_cache::load_response_cache,
@@ -45,7 +50,11 @@ fn main() {
             grpc::grpc_invoke_unary,
             mock_server::start_mock_server,
             mock_server::stop_mock_server,
-            mock_server::mock_server_status
+            mock_server::mock_server_status,
+            perf::get_perf_stats,
+            oauth::oauth2_await_callback,
+            cookie_jar::load_cookie_jar,
+            cookie_jar::save_cookie_jar
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

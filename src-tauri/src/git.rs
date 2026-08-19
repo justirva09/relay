@@ -252,8 +252,15 @@ fn node_id_of(content: &Option<String>) -> Option<String> {
 /// `git status` below, working-tree mode only (an untracked file has no
 /// place in a plain branch-vs-branch comparison, since it was never part of
 /// any commit on either side).
+/// `include_head`: whether to also fetch each changed file's HEAD content
+/// (for the committed-vs-uncommitted line tagging in Compare Branches).
+/// This costs one extra `git show HEAD:path` subprocess per changed file,
+/// so callers that don't use `.head` (StageCommitModal) or that only need
+/// it for entries a user actually expands (BranchComparePanel — see
+/// `git_show_at_ref` for the on-demand alternative) should pass `false` to
+/// keep the bulk fetch fast regardless of how many files changed.
 #[tauri::command]
-pub fn git_branch_diff(dir: String, base: String, compare: Option<String>) -> Result<Vec<BranchDiffEntry>, String> {
+pub fn git_branch_diff(dir: String, base: String, compare: Option<String>, include_head: bool) -> Result<Vec<BranchDiffEntry>, String> {
     let path = Path::new(&dir);
     if run_git(path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(vec![]);
@@ -305,16 +312,28 @@ pub fn git_branch_diff(dir: String, base: String, compare: Option<String>) -> Re
         None => fs::read_to_string(path.join(p)).ok(),
     };
 
-    let head_of = |p: &str| -> Option<String> {
-        if compare.is_some() {
+    // When `base` IS "HEAD" (StageCommitModal's every call — it diffs
+    // HEAD-vs-working-tree, never uses `head` at all), `before` already IS
+    // HEAD's content — reusing it avoids a second `git show` subprocess per
+    // file for a value that would be byte-identical anyway. That redundant
+    // spawn (on top of the `before`/`after` ones already happening per
+    // file) was doubling the process count on every Source Control open,
+    // which is what made it noticeably laggy on repos with several changes.
+    let head_of = |p: &str, before_content: &Option<String>| -> Option<String> {
+        if !include_head || compare.is_some() {
             return None;
+        }
+        if base == "HEAD" {
+            return before_content.clone();
         }
         show_at("HEAD", p)
     };
 
     let mut entries = Vec::new();
     for p in &modified_paths {
-        entries.push(BranchDiffEntry { path: p.clone(), status: "modified".to_string(), before: show_at(&base, p), after: show_compare(p), head: head_of(p) });
+        let before = show_at(&base, p);
+        let head = head_of(p, &before);
+        entries.push(BranchDiffEntry { path: p.clone(), status: "modified".to_string(), before, after: show_compare(p), head });
     }
 
     let mut removed_contents: Vec<(String, Option<String>)> = removed_paths.iter().map(|p| (p.clone(), show_at(&base, p))).collect();
@@ -326,17 +345,29 @@ pub fn git_branch_diff(dir: String, base: String, compare: Option<String>) -> Re
             .and_then(|aid| removed_contents.iter().position(|(_, c)| node_id_of(c).as_deref() == Some(aid.as_str())));
         if let Some(idx) = matched {
             let (_, before_content) = removed_contents.remove(idx);
-            entries.push(BranchDiffEntry { path: added_path.clone(), status: "modified".to_string(), before: before_content, after: after_content, head: head_of(added_path) });
+            let head = head_of(added_path, &before_content);
+            entries.push(BranchDiffEntry { path: added_path.clone(), status: "modified".to_string(), before: before_content, after: after_content, head });
         } else {
-            entries.push(BranchDiffEntry { path: added_path.clone(), status: "added".to_string(), before: None, after: after_content, head: head_of(added_path) });
+            let head = head_of(added_path, &None);
+            entries.push(BranchDiffEntry { path: added_path.clone(), status: "added".to_string(), before: None, after: after_content, head });
         }
     }
     for (p, before_content) in removed_contents {
-        let head = head_of(&p);
+        let head = head_of(&p, &before_content);
         entries.push(BranchDiffEntry { path: p, status: "removed".to_string(), before: before_content, after: None, head });
     }
 
     Ok(entries)
+}
+
+/// On-demand single-file lookup for whatever `git_branch_diff` skipped when
+/// called with `include_head: false` — used to fetch one entry's HEAD
+/// content only once a user actually expands it in Compare Branches,
+/// instead of every changed file paying for it upfront.
+#[tauri::command]
+pub fn git_show_at_ref(dir: String, rev: String, path: String) -> Result<Option<String>, String> {
+    let base_path = Path::new(&dir);
+    Ok(run_git(base_path, &["show", &format!("{}:{}", rev, path)]).ok())
 }
 
 #[tauri::command]
@@ -621,7 +652,7 @@ mod tests {
         fs::write(dir.join(".relay").join("brand-new.relay"), r#"{"id":"brand-new","request":{"url":"/z"}}"#).unwrap();
         git_commit(dir.to_string_lossy().to_string(), "changes on feature-x".to_string()).unwrap();
 
-        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "main".to_string(), Some("feature-x".to_string())).unwrap();
+        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "main".to_string(), Some("feature-x".to_string()), false).unwrap();
         assert_eq!(diff.len(), 3, "keep(modified) + gone(removed) + brand-new(added)");
 
         let modified = diff.iter().find(|e| e.path.contains("keep")).unwrap();
@@ -654,7 +685,7 @@ mod tests {
         fs::write(dir.join(".relay").join("new-name.relay"), r#"{"id":"stable-id","request":{"url":"/b"}}"#).unwrap();
         git_commit(dir.to_string_lossy().to_string(), "renamed + changed".to_string()).unwrap();
 
-        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "main".to_string(), Some("rename-branch".to_string())).unwrap();
+        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "main".to_string(), Some("rename-branch".to_string()), false).unwrap();
         assert_eq!(diff.len(), 1, "same id across the rename should collapse into one modified entry, not add+delete");
         assert_eq!(diff[0].status, "modified");
         assert!(diff[0].before.as_ref().unwrap().contains("/a"));
@@ -677,7 +708,7 @@ mod tests {
         // ...and leave another change fully unstaged.
         fs::write(dir.join(".relay").join("unstaged.relay"), r#"{"id":"unstaged-id","request":{"url":"/after-unstaged"}}"#).unwrap();
 
-        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "main".to_string(), None).unwrap();
+        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "main".to_string(), None, false).unwrap();
         assert_eq!(diff.len(), 2, "working-tree diff should see both the staged and the unstaged change");
 
         let staged = diff.iter().find(|e| e.path.contains("staged.relay") && !e.path.contains("unstaged")).unwrap();
@@ -700,11 +731,70 @@ mod tests {
 
         fs::write(dir.join(".relay").join("brand-new.relay"), r#"{"id":"new-id","request":{"method":"POST","url":"/new"}}"#).unwrap();
 
-        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "main".to_string(), None).unwrap();
+        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "main".to_string(), None, false).unwrap();
         assert_eq!(diff.len(), 1, "the untracked new request should be detected");
         assert_eq!(diff[0].status, "added");
         assert!(diff[0].path.contains("brand-new"));
         assert!(diff[0].after.as_ref().unwrap().contains("new-id"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn branch_diff_reuses_before_as_head_when_base_is_head_itself() {
+        // StageCommitModal always calls with base="HEAD" and never reads
+        // `.head` at all — when base IS HEAD, `before` and `head` would be
+        // byte-identical, so head_of should reuse `before` instead of
+        // spawning a second `git show HEAD:path` per file (this used to
+        // double the git subprocess count on every Source Control open).
+        let dir = tmp_repo("branch-diff-head-reuse");
+        init_hidden_relay(&dir);
+        fs::write(dir.join(".relay").join("req.relay"), r#"{"id":"req-id","request":{"method":"GET","url":"/before"}}"#).unwrap();
+        git_commit(dir.to_string_lossy().to_string(), "base".to_string()).unwrap();
+
+        fs::write(dir.join(".relay").join("req.relay"), r#"{"id":"req-id","request":{"method":"POST","url":"/after"}}"#).unwrap();
+
+        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "HEAD".to_string(), None, true).unwrap();
+        assert_eq!(diff.len(), 1);
+        let entry = &diff[0];
+        assert!(entry.before.as_ref().unwrap().contains("/before"));
+        assert!(entry.after.as_ref().unwrap().contains("/after"));
+        assert_eq!(entry.head, entry.before, "head should equal before, not None or a fresh (redundant) fetch");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn branch_diff_skips_head_entirely_when_include_head_is_false() {
+        // BranchComparePanel's initial bulk load passes include_head=false —
+        // this is what keeps opening Compare Branches fast regardless of how
+        // many files changed, deferring the one-git-show-per-file cost to
+        // git_show_at_ref, called only for entries a user actually expands.
+        let dir = tmp_repo("branch-diff-no-head");
+        init_hidden_relay(&dir);
+        fs::write(dir.join(".relay").join("req.relay"), r#"{"id":"req-id","request":{"url":"/before"}}"#).unwrap();
+        git_commit(dir.to_string_lossy().to_string(), "base".to_string()).unwrap();
+        fs::write(dir.join(".relay").join("req.relay"), r#"{"id":"req-id","request":{"url":"/after"}}"#).unwrap();
+
+        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "HEAD".to_string(), None, false).unwrap();
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff[0].head, None, "include_head=false should skip the extra git show entirely, even though base==HEAD would otherwise make it free");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn git_show_at_ref_fetches_one_file_on_demand() {
+        let dir = tmp_repo("show-at-ref");
+        init_hidden_relay(&dir);
+        fs::write(dir.join(".relay").join("req.relay"), r#"{"id":"req-id","request":{"url":"/v1"}}"#).unwrap();
+        git_commit(dir.to_string_lossy().to_string(), "base".to_string()).unwrap();
+
+        let content = git_show_at_ref(dir.to_string_lossy().to_string(), "HEAD".to_string(), ".relay/req.relay".to_string()).unwrap();
+        assert!(content.unwrap().contains("/v1"));
+
+        let missing = git_show_at_ref(dir.to_string_lossy().to_string(), "HEAD".to_string(), ".relay/nope.relay".to_string()).unwrap();
+        assert_eq!(missing, None);
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -729,7 +819,7 @@ mod tests {
         fs::write(dir.join(".relay").join("real-request.relay"), r#"{"id":"req-1","request":{"method":"POST","url":"/x"}}"#).unwrap();
         git_commit(dir.to_string_lossy().to_string(), "changes".to_string()).unwrap();
 
-        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "HEAD~1".to_string(), Some("HEAD".to_string())).unwrap();
+        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "HEAD~1".to_string(), Some("HEAD".to_string()), false).unwrap();
         assert_eq!(diff.len(), 1, "only the real request should appear, not workspace.relay or the environment file");
         assert!(diff[0].path.contains("real-request"));
 

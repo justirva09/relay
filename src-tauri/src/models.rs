@@ -18,6 +18,17 @@ pub struct HttpRequestPayload {
     pub body: Option<String>,
     #[serde(default)]
     pub form_data: Option<Vec<FormDataFieldPayload>>,
+    /// 0 or absent means "use Relay's default timeout".
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default = "default_true")]
+    pub follow_redirects: bool,
+    #[serde(default)]
+    pub max_redirects: Option<u32>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Serialize)]

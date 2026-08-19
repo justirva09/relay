@@ -45,7 +45,7 @@ export default function StageCommitModal({ branch, onClose, onCommitted }: { bra
 
   useEffect(() => {
     if (!workspaceDir) return;
-    gitBranchDiff(workspaceDir, "HEAD", null).then((raw) => {
+    gitBranchDiff(workspaceDir, "HEAD", null, false).then((raw) => {
       setRawEntries(raw);
       const summary = buildBranchDiffSummary(raw);
       const all = [...summary.breaking, ...summary.safe];

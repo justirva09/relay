@@ -23,6 +23,10 @@ export interface NativeHttpRequest {
   headers: [string, string][];
   body?: string;
   form_data?: NativeFormDataField[];
+  // 0/undefined means "use Relay's default" on the Rust side.
+  timeout_ms?: number;
+  follow_redirects?: boolean;
+  max_redirects?: number;
 }
 
 // Runs the actual network call in Rust (reqwest), so there's no browser CORS
@@ -30,6 +34,31 @@ export interface NativeHttpRequest {
 // native instead of using fetch() from the frontend.
 export function sendHttpRequest(payload: NativeHttpRequest): Promise<NativeHttpResponse> {
   return invoke("http_request", { payload });
+}
+
+export interface OAuthCallbackResult {
+  code: string | null;
+  state: string | null;
+  error: string | null;
+}
+
+// Binds a one-shot local listener on 127.0.0.1:<port>/callback and resolves
+// with the first request it receives — the OAuth2 provider's redirect after
+// the user approves in their system browser. Must be awaited (not just
+// fire-and-forget) before opening the browser tab, so there's no race
+// between the redirect arriving and this being ready to catch it.
+export function oauth2AwaitCallback(port: number, timeoutSecs: number): Promise<OAuthCallbackResult> {
+  return invoke("oauth2_await_callback", { port, timeoutSecs });
+}
+
+// Local-only, per-workspace-folder cookie jar — see cookie_jar.rs. Never
+// part of the .relay files themselves.
+export function loadCookieJar(workspaceDir: string): Promise<string> {
+  return invoke("load_cookie_jar", { workspaceDir });
+}
+
+export function saveCookieJar(workspaceDir: string, data: string): Promise<void> {
+  return invoke("save_cookie_jar", { workspaceDir, data });
 }
 
 export async function loadWorkspaceFile(): Promise<string | null> {
@@ -176,8 +205,29 @@ export interface BranchDiffEntry {
 
 // compare: null diffs `base` against the current working tree (staged +
 // unstaged combined) instead of another branch — see git_branch_diff.
-export function gitBranchDiff(dir: string, base: string, compare: string | null): Promise<BranchDiffEntry[]> {
-  return invoke("git_branch_diff", { dir, base, compare });
+// includeHead: fetches each changed file's HEAD content too (one extra git
+// subprocess per file) for the committed-vs-uncommitted line tagging — pass
+// false for a bulk listing where nothing reads `.head` yet, and fetch it
+// on demand per entry with gitShowAtRef instead (see BranchComparePanel).
+export function gitBranchDiff(dir: string, base: string, compare: string | null, includeHead: boolean): Promise<BranchDiffEntry[]> {
+  return invoke("git_branch_diff", { dir, base, compare, includeHead });
+}
+
+// Single-file on-demand fetch — the lazy counterpart to gitBranchDiff's
+// includeHead, so only entries a user actually expands pay for it.
+export function gitShowAtRef(dir: string, rev: string, path: string): Promise<string | null> {
+  return invoke("git_show_at_ref", { dir, rev, path });
+}
+
+export interface PerfStats {
+  cpu_percent: number;
+  memory_bytes: number;
+  uptime_secs: number;
+  pid: number;
+}
+
+export function getPerfStats(): Promise<PerfStats | null> {
+  return invoke("get_perf_stats");
 }
 
 // Stages exactly these paths (relative to dir) — for partial-field staging,
