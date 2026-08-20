@@ -75,8 +75,8 @@ export function EnvironmentBar({ onShowOverview }: { onShowOverview: () => void 
   const { isDark } = useTheme();
   const [showThemeModal, setShowThemeModal] = useState(false);
   const [showCookies, setShowCookies] = useState(false);
-  const { responseLayout, setResponseLayout } = useLayout();
-  const { mockServerRunningPort, toggleMockServer, envModalTarget, closeEnvironmentModal, safeMode } = useWorkspace();
+  const { responseLayout, setResponseLayout, sidebarCollapsed, toggleSidebar, devToolsOpen, setDevToolsOpen } = useLayout();
+  const { mockServerRunningPort, toggleMockServer, envModalTarget, closeEnvironmentModal, safeMode, openRunner } = useWorkspace();
 
   // The {{variable}} click-to-navigate feature (RequestPanel/KeyValueEditor)
   // has no direct handle on this component's local showModal state — it
@@ -97,7 +97,67 @@ export function EnvironmentBar({ onShowOverview }: { onShowOverview: () => void 
 
   return (
     <>
-      <div className="h-[49px] flex items-center justify-end gap-2 px-3 border-b border-th-border bg-th-bg shrink-0">
+      <div className="h-9 flex items-center justify-between gap-2 px-3 border-b border-th-border bg-th-bg shrink-0">
+        <button
+          title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+          onClick={toggleSidebar}
+          className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="1.5" />
+            <line x1="9" y1="4" x2="9" y2="20" />
+            {sidebarCollapsed && <rect x="3" y="4" width="6" height="16" rx="1.5" fill="currentColor" stroke="none" opacity="0.5" />}
+          </svg>
+        </button>
+        <div className="flex items-center gap-1">
+          <button
+            title={responseLayout === "side" ? "Switch response panel to bottom" : "Switch response panel to side"}
+            onClick={() => setResponseLayout(responseLayout === "side" ? "bottom" : "side")}
+            className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
+          >
+            {responseLayout === "side" ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="1.5" />
+                <line x1="12" y1="4" x2="12" y2="20" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="1.5" />
+                <line x1="3" y1="13" x2="21" y2="13" />
+              </svg>
+            )}
+          </button>
+          <button
+            title="Dev Tools"
+            onClick={() => setDevToolsOpen(!devToolsOpen)}
+            className={`h-6 w-6 grid place-items-center rounded hover:text-th-accent-text hover:bg-th-accent-bg ${devToolsOpen ? "text-th-accent-text bg-th-accent-bg" : "text-th-text-3"}`}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
+            </svg>
+          </button>
+          <button
+            title="Appearance & themes"
+            onClick={() => setShowThemeModal(true)}
+            className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
+          >
+            {isDark ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="5" />
+                <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
+              </svg>
+            )}
+          </button>
+        </div>
+      </div>
+      <div className="h-10 flex items-center gap-2 px-3 border-b border-th-border bg-th-bg shrink-0">
         <button
           title="Workspace overview"
           onClick={onShowOverview}
@@ -152,7 +212,7 @@ export function EnvironmentBar({ onShowOverview }: { onShowOverview: () => void 
             )}
           </button>
         )}
-        <div className="w-px h-5 bg-th-border mx-0.5" />
+        <div className="flex-1" />
         <EnvDropdown />
         <button
           onClick={() => setShowModal(true)}
@@ -162,41 +222,15 @@ export function EnvironmentBar({ onShowOverview }: { onShowOverview: () => void 
         </button>
         <div className="w-px h-5 bg-th-border mx-0.5" />
         <button
-          title={responseLayout === "side" ? "Switch response panel to bottom" : "Switch response panel to side"}
-          onClick={() => setResponseLayout(responseLayout === "side" ? "bottom" : "side")}
+          title="Runner — run multiple requests in sequence"
+          onClick={openRunner}
           className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
         >
-          {responseLayout === "side" ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="4" width="18" height="16" rx="1.5" />
-              <line x1="12" y1="4" x2="12" y2="20" />
-            </svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="4" width="18" height="16" rx="1.5" />
-              <line x1="3" y1="13" x2="21" y2="13" />
-            </svg>
-          )}
-        </button>
-        <div className="w-px h-5 bg-th-border mx-0.5" />
-        <button
-          title="Appearance & themes"
-          onClick={() => setShowThemeModal(true)}
-          className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
-        >
-          {isDark ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="5" />
-              <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
-              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-              <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
-              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-            </svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
-            </svg>
-          )}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="13" cy="4" r="2" />
+            <path d="M6 21l3-6 2-3-1-4 5-1 3 4-2 3 3 3" />
+            <path d="M9 12l-3 2" />
+          </svg>
         </button>
         <button
           title={safeMode ? "Script Safety: Safe Mode (scripts sandboxed)" : "Script Safety: Developer Mode (scripts unsandboxed)"}

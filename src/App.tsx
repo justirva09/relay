@@ -7,6 +7,7 @@ import GrpcPanel from "./components/GrpcPanel";
 import GrpcResponsePanel from "./components/GrpcResponsePanel";
 import OverviewPage from "./components/OverviewPage";
 import BranchComparePanel from "./components/BranchComparePanel";
+import RunnerPanel from "./components/RunnerPanel";
 import { EnvironmentBar } from "./components/EnvironmentModal";
 import { WorkspaceProvider, useWorkspace } from "./store";
 import { ThemeProvider } from "./lib/theme";
@@ -267,7 +268,7 @@ function WorkspaceFolderBanner() {
 }
 
 function Main() {
-  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, setProtoLibrary, compareOpen, closeCompare, openCompare, closeTab, closeAllTabs, setActiveTab } = useWorkspace();
+  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, setProtoLibrary, compareOpen, closeCompare, openCompare, runnerOpen, openRunner, closeRunner, closeTab, closeAllTabs, setActiveTab } = useWorkspace();
   const activeTab = tabs.find((t) => t.nodeId === activeTabId) || null;
   const { responseLayout } = useLayout();
   const [showOverview, setShowOverview] = useState(false);
@@ -295,14 +296,22 @@ function Main() {
     if (openTick > 0) closeCompare();
   }, [openTick, closeCompare]);
 
+  // Same reasoning applies to the Runner.
   useEffect(() => {
-    if (!compareOpen) return;
+    if (openTick > 0) closeRunner();
+  }, [openTick, closeRunner]);
+
+  useEffect(() => {
+    if (!compareOpen && !runnerOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeCompare();
+      if (e.key === "Escape") {
+        closeCompare();
+        closeRunner();
+      }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [compareOpen, closeCompare]);
+  }, [compareOpen, closeCompare, runnerOpen, closeRunner]);
 
   const [splitWidth, setSplitWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem("relay-split-width"));
@@ -341,9 +350,10 @@ function Main() {
         else sendTab(activeTab.nodeId);
       }),
       registerAction("view.compareBranches", () => openCompare()),
+      registerAction("view.runner", () => openRunner()),
     ];
     return () => unregisters.forEach((u) => u());
-  }, [activeTabId, tabs, activeTab, saveTab, closeTab, closeAllTabs, setActiveTab, sendTab, sendGrpcTab, openCompare]);
+  }, [activeTabId, tabs, activeTab, saveTab, closeTab, closeAllTabs, setActiveTab, sendTab, sendGrpcTab, openCompare, openRunner]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -510,7 +520,9 @@ function Main() {
         <WorkspaceFolderBanner />
         <EnvironmentBar onShowOverview={() => setShowOverview(true)} />
         <TabBar />
-        {compareOpen ? (
+        {runnerOpen ? (
+          <RunnerPanel onClose={closeRunner} />
+        ) : compareOpen ? (
           <BranchComparePanel onClose={closeCompare} />
         ) : !activeTab || showOverview ? (
           <OverviewPage />

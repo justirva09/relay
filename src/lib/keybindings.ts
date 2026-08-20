@@ -31,6 +31,7 @@ export const KEYBINDING_DEFS: KeybindingDef[] = [
 
   { id: "view.settings", label: "Open Settings", category: "View", defaultCombo: "mod+," },
   { id: "view.compareBranches", label: "Compare Branches", category: "View", defaultCombo: "mod+shift+b" },
+  { id: "view.runner", label: "Open Runner", category: "View", defaultCombo: "mod+r" },
 ];
 
 const OVERRIDES_KEY = "relay-keybindings-overrides";

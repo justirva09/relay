@@ -20,7 +20,8 @@ import { useVariableHover, variableTokenAtElement, useModifierHeld, VariableInfo
 import VariableHoverTooltip from "./VariableHoverTooltip";
 import InfoTooltip from "./InfoTooltip";
 import ToggleSwitch from "./ToggleSwitch";
-import ProFeatureGate from "./ProFeatureGate";
+import { hasFeature, subscribeLicense } from "../lib/license";
+import { runAction } from "../lib/keybindings";
 
 function UrlInput({ value, onChange, onKeyDown, placeholder, variables, variableInfo }: {
   value: string;
@@ -260,9 +261,10 @@ interface ExamplesTabProps {
   safeMode: boolean;
   mockPort: number | null;
   onCompareVsMock: () => void;
+  contractCheckEntitled: boolean;
 }
 
-function ExamplesTab({ examples, onChange, testScript, variables, safeMode, mockPort, onCompareVsMock }: ExamplesTabProps) {
+function ExamplesTab({ examples, onChange, testScript, variables, safeMode, mockPort, onCompareVsMock, contractCheckEntitled }: ExamplesTabProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [editingStatusId, setEditingStatusId] = useState<string | null>(null);
@@ -321,10 +323,22 @@ function ExamplesTab({ examples, onChange, testScript, variables, safeMode, mock
       <button
         onClick={onCompareVsMock}
         disabled={!mockPort}
-        title={!mockPort ? "Start the local mock server first" : "Send this request to the mock server and to your active environment, then diff the results"}
-        className="shrink-0 px-2.5 py-1.5 rounded-md text-[12px] font-mono border border-th-border-input text-th-text-2 hover:text-th-accent-text hover:bg-th-hover transition-colors disabled:opacity-40 disabled:hover:text-th-text-2 disabled:hover:bg-transparent disabled:cursor-default"
+        title={
+          !mockPort
+            ? "Start the local mock server first"
+            : contractCheckEntitled
+            ? "Send this request to the mock server and to your active environment, then diff the results"
+            : "Requires Relay Pro — click to check your account"
+        }
+        className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px] font-mono border border-th-border-input text-th-text-2 hover:text-th-accent-text hover:bg-th-hover transition-colors disabled:opacity-40 disabled:hover:text-th-text-2 disabled:hover:bg-transparent disabled:cursor-default"
       >
         Compare vs Mock
+        {!contractCheckEntitled && (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-th-text-4">
+            <rect x="5" y="11" width="14" height="9" rx="2" />
+            <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+          </svg>
+        )}
       </button>
     </div>
   );
@@ -525,6 +539,10 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
   const [oauthLoading, setOauthLoading] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
   const methodColor = METHOD_COLOR[draft.method] || METHOD_COLOR.GET;
+  // Re-renders when sign-in/refresh/expiry changes what hasFeature() returns
+  // — otherwise a stale render would keep showing the pre-login gate state.
+  const [, forceLicenseRerender] = useState(0);
+  useEffect(() => subscribeLicense(() => forceLicenseRerender((n) => n + 1)), []);
 
   const { workspace, mockServerRunningPort, safeMode } = useWorkspace();
   const [showContractCheck, setShowContractCheck] = useState(false);
@@ -779,7 +797,7 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
               </>
             )}
             {draft.auth.type === "awsSigV4" && (
-              <ProFeatureGate feature="auth.awsSigV4">
+              <>
                 <div>
                   <p className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mb-1.5">Access Key ID</p>
                   <ValueInput
@@ -828,10 +846,10 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
                   </div>
                 </div>
                 <p className="text-[11px] text-th-text-4">Doesn't cover multipart form-data bodies — the signed payload hash needs the exact bytes Rust builds for those.</p>
-              </ProFeatureGate>
+              </>
             )}
             {draft.auth.type === "oauth2" && (
-              <ProFeatureGate feature="auth.oauth2">
+              <>
                 <div>
                   <p className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mb-1.5">Authorization URL</p>
                   <ValueInput
@@ -929,7 +947,7 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
                     </p>
                   )}
                 </div>
-              </ProFeatureGate>
+              </>
             )}
             {draft.auth.type !== "none" && draft.auth.type !== "oauth2" && (
               <p className="text-[11.5px] text-th-text-4">
@@ -1071,7 +1089,8 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
             variables={variables}
             safeMode={safeMode}
             mockPort={mockServerRunningPort}
-            onCompareVsMock={() => setShowContractCheck(true)}
+            onCompareVsMock={() => (hasFeature("contract.check") ? setShowContractCheck(true) : runAction("view.settings"))}
+            contractCheckEntitled={hasFeature("contract.check")}
           />
         )}
         {reqTab === "settings" && (

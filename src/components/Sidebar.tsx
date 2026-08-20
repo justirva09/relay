@@ -4,6 +4,7 @@ import { useWorkspace } from "../store";
 import GitPanel from "./GitPanel";
 import CurlImportModal from "./CurlImportModal";
 import { registerAction, setActiveSearchRegion } from "../lib/keybindings";
+import { useLayout } from "../lib/layout";
 
 export const METHOD_COLOR: Record<string, string> = {
   GET: "text-emerald-400",
@@ -381,6 +382,7 @@ const SIDEBAR_DEFAULT = 260;
 
 export default function Sidebar() {
   const { workspace, addFolder, addRequest, addGrpcRequest, duplicateNode, deleteNodes, moveNodes, renameWorkspace, collapseAllFolders, importIntoFolder, openTab, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport } = useWorkspace();
+  const { sidebarCollapsed } = useLayout();
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [triggerEditId, setTriggerEditId] = useState<string | null>(null);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
@@ -588,11 +590,13 @@ export default function Sidebar() {
 
   return (
     <div
-      className="relative shrink-0 border-r border-th-border bg-th-sidebar flex flex-col h-full"
-      style={{ width }}
+      className={`relative shrink-0 border-r border-th-border bg-th-sidebar flex flex-col h-full overflow-hidden ${
+        resizing ? "" : "transition-[width] duration-200 ease-in-out"
+      }`}
+      style={{ width: sidebarCollapsed ? 0 : width }}
       onMouseEnter={() => setActiveSearchRegion("sidebar")}
     >
-      <div className="h-[49px] px-3 flex items-center justify-between border-b border-th-border shrink-0">
+      <div className="h-9 px-3 flex items-center justify-between border-b border-th-border shrink-0">
         <div className="flex items-center gap-1.5 min-w-0">
           {editingTitle ? (
             <input
@@ -653,8 +657,8 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <div className="px-3 py-2 border-b border-th-border shrink-0">
-        <div className="relative">
+      <div className="h-10 px-3 flex items-center border-b border-th-border shrink-0">
+        <div className="relative w-full">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="absolute left-2 top-1/2 -translate-y-1/2 text-th-text-3 pointer-events-none">
             <circle cx="11" cy="11" r="7" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -664,7 +668,7 @@ export default function Sidebar() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search requests…"
-            className="w-full bg-th-bg border border-th-border-input rounded-md pl-7 pr-6 py-1.5 text-[12px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
+            className="w-full bg-transparent border-none pl-7 pr-6 py-1.5 text-[12px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none"
           />
           {searchQuery && (
             <button

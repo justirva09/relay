@@ -36,6 +36,14 @@ interface Ctx {
   // files, same as Postman/Bruno keep cookies out of shared collections.
   cookies: StoredCookie[];
   setCookies: (cookies: StoredCookie[]) => void;
+  // Writes a pre/test script's pm.variables.set()/pm.environment.set()
+  // changes back to the right scope (workspace-global vs active
+  // environment) — exposed so the Runner can send requests exactly the way
+  // a single request's own Send button does.
+  applyVariableChanges: (changed: Record<string, string>) => void;
+  runnerOpen: boolean;
+  openRunner: () => void;
+  closeRunner: () => void;
   toggleMockServer: () => Promise<void>;
   tabs: TabState[];
   activeTabId: string | null;
@@ -211,6 +219,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [pendingImport, setPendingImport] = useState<{ tree: TreeNode[]; variables: KVRow[]; targetFolderId?: string } | null>(null);
   const [pendingExport, setPendingExport] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [runnerOpen, setRunnerOpen] = useState(false);
   const [envModalTarget, setEnvModalTarget] = useState<{ tab: string; key?: string } | null>(null);
   const [curlImportOpen, setCurlImportOpen] = useState(false);
   const [curlImportParentId, setCurlImportParentId] = useState<string | null>(null);
@@ -821,6 +830,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const cancelExport = useCallback(() => setPendingExport(false), []);
 
   const openCompare = useCallback(() => setCompareOpen(true), []);
+  const openRunner = useCallback(() => setRunnerOpen(true), []);
+  const closeRunner = useCallback(() => setRunnerOpen(false), []);
   const closeCompare = useCallback(() => setCompareOpen(false), []);
   const openEnvironmentModal = useCallback((tab: string, key?: string) => setEnvModalTarget({ tab, key }), []);
   const closeEnvironmentModal = useCallback(() => setEnvModalTarget(null), []);
@@ -1049,6 +1060,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       compareOpen,
       openCompare,
       closeCompare,
+      applyVariableChanges,
+      runnerOpen,
+      openRunner,
+      closeRunner,
       envModalTarget,
       openEnvironmentModal,
       closeEnvironmentModal,
@@ -1061,7 +1076,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       moveNodes,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPortPersisted, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPortPersisted, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

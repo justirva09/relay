@@ -101,8 +101,22 @@ export function subscribeLicense(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+// Checked entirely against the cached signed license, no network needed —
+// but a cache is only ever trustworthy up to the expiry it was signed with.
+// The server already excludes features for a non-active subscription
+// (see issue-license's effectivePlan), but that's only as fresh as the last
+// refresh; expires_at is a concrete timestamp, so it's checked here too as
+// a client-side backstop against a stale-but-still-cached license outliving
+// the period it was actually valid for.
+export function isLicenseValid(): boolean {
+  if (!state.license) return false;
+  if (state.license.expires_at && Date.parse(state.license.expires_at) <= Date.now()) return false;
+  return true;
+}
+
 export function hasFeature(id: string): boolean {
-  return state.license?.features.includes(id) ?? false;
+  if (!isLicenseValid()) return false;
+  return state.license!.features.includes(id);
 }
 
 function base64UrlDecode(s: string): Uint8Array {
@@ -132,6 +146,40 @@ async function verifySignedLicense(payloadB64: string, signatureB64: string): Pr
   } catch {
     return null;
   }
+}
+
+// Supabase access tokens expire (~1h) — refreshLicense used to send the raw
+// stored accessToken forever, so any session older than that expiry hit
+// issue-license's supabase.auth.getUser() check and got a 401. This exchanges
+// the refresh_token for a new access_token whenever the cached one is
+// expired or about to be, before making the actual issue-license call.
+async function ensureFreshAccessToken(session: LicenseSession): Promise<LicenseSession> {
+  const expiringSoon = !session.expiresAt || session.expiresAt <= Date.now() + 60_000;
+  if (!expiringSoon || !session.refreshToken) return session;
+
+  const res = await sendHttpRequest({
+    method: "POST",
+    url: `${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,
+    headers: [
+      ["Content-Type", "application/json"],
+      ["apikey", SUPABASE_ANON_KEY],
+    ],
+    body: JSON.stringify({ refresh_token: session.refreshToken }),
+  });
+  if (!res.ok) throw new Error(`Session refresh failed: ${res.status} ${res.status_text}`);
+
+  const body = JSON.parse(res.body);
+  if (!body.access_token) throw new Error(`No access_token in refresh response: ${res.body}`);
+
+  const refreshed: LicenseSession = {
+    ...session,
+    accessToken: body.access_token,
+    refreshToken: body.refresh_token ?? session.refreshToken,
+    expiresAt: typeof body.expires_in === "number" ? Date.now() + body.expires_in * 1000 : undefined,
+  };
+  persistSession(refreshed);
+  setState({ session: refreshed });
+  return refreshed;
 }
 
 function persistSession(session: LicenseSession | null) {
@@ -169,11 +217,12 @@ export async function refreshLicense(): Promise<void> {
 
   setState({ loading: true, error: null });
   try {
+    const freshSession = await ensureFreshAccessToken(session);
     const res = await sendHttpRequest({
       method: "POST",
       url: `${SUPABASE_URL}/functions/v1/issue-license`,
       headers: [
-        ["Authorization", `Bearer ${session.accessToken}`],
+        ["Authorization", `Bearer ${freshSession.accessToken}`],
         ["apikey", SUPABASE_ANON_KEY],
       ],
     });
