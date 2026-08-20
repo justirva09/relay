@@ -1,13 +1,17 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Environment, FolderNode, GrpcLogEntry, GrpcRequestData, GrpcRequestNode, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, RequestNode, ResponseState, StoredCookie, TabState, TreeNode, Workspace, defaultGrpcRequest, defaultRequest, demoWorkspace, newRow, normalizeRequestData, uid } from "./types";
-import { loadWorkspaceFile, pickCollectionFile, pickSavePath, readFileAtPath, writeFileAtPath, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles, loadResponseCache, saveResponseCache, loadCookieJar, saveCookieJar, startMockServer as startMockServerTauri, stopMockServer as stopMockServerTauri, mockServerStatus as mockServerStatusTauri } from "./lib/tauri";
+import { GrpcLogEntry, GrpcRequestData, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, StoredCookie, TabState, TreeNode, Workspace, demoWorkspace, newRow, normalizeRequestData, uid } from "./types";
+import { loadWorkspaceFile, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles } from "./lib/tauri";
 import { runRequest } from "./lib/useSendRequest";
-import { isPostmanCollection, isRelayWorkspace, postmanToTree, treeToPostman } from "./lib/postman";
-import { isOpenApiSpec, parseOpenApiSpec, parseCollectionFile } from "./lib/openapi";
-import { mergeIncomingTree, findFolderPath } from "./lib/mergeImport";
-import { filterTreeBySelection } from "./lib/treeFilter";
 import { simulateGrpcCall } from "./lib/grpcMock";
 import { invokeGrpcUnary } from "./lib/grpcClient";
+import { findNode, mapTree } from "./store/treeOps";
+import { useCookieJar } from "./store/useCookieJar";
+import { useMockServer } from "./store/useMockServer";
+import { useSafeMode } from "./store/useSafeMode";
+import { useResponseCache } from "./store/useResponseCache";
+import { useEnvironments } from "./store/useEnvironments";
+import { useTreeActions } from "./store/useTreeActions";
+import { useImportExport } from "./store/useImportExport";
 
 interface Ctx {
   workspace: Workspace;
@@ -116,61 +120,6 @@ interface Ctx {
 
 const WorkspaceContext = createContext<Ctx | null>(null);
 
-function mapTree(nodes: TreeNode[], id: string, fn: (n: TreeNode) => TreeNode | null): TreeNode[] {
-  const out: TreeNode[] = [];
-  for (const n of nodes) {
-    if (n.id === id) {
-      const replaced = fn(n);
-      if (replaced) out.push(replaced);
-      continue;
-    }
-    if (n.kind === "folder") {
-      out.push({ ...n, children: mapTree(n.children, id, fn) });
-    } else {
-      out.push(n);
-    }
-  }
-  return out;
-}
-
-export function findNode(nodes: TreeNode[], id: string): TreeNode | null {
-  for (const n of nodes) {
-    if (n.id === id) return n;
-    if (n.kind === "folder") {
-      const found = findNode(n.children, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-export function findParentFolderId(nodes: TreeNode[], childId: string, parentId: string | null = null): string | null {
-  for (const n of nodes) {
-    if (n.id === childId) return parentId;
-    if (n.kind === "folder") {
-      const found = findParentFolderId(n.children, childId, n.id);
-      if (found !== null) return found;
-    }
-  }
-  return null;
-}
-
-function cloneWithFreshIds(node: TreeNode): TreeNode {
-  if (node.kind === "folder") {
-    return { ...node, id: uid(), children: node.children.map(cloneWithFreshIds) };
-  }
-  return { ...node, id: uid() };
-}
-
-function insertAt(nodes: TreeNode[], parentId: string | null, node: TreeNode): TreeNode[] {
-  if (parentId === null) return [...nodes, node];
-  return nodes.map((n) => {
-    if (n.kind === "folder" && n.id === parentId) return { ...n, children: [...n.children, node] };
-    if (n.kind === "folder") return { ...n, children: insertAt(n.children, parentId, node) };
-    return n;
-  });
-}
-
 function normalizeWorkspace(raw: any, fallbackName = "My Workspace"): Workspace {
   const ws = raw ?? {};
   if (typeof ws.name !== "string" || !ws.name.trim()) ws.name = fallbackName;
@@ -187,25 +136,6 @@ function basenameFromPath(path: string): string {
   return parts[parts.length - 1] || "My Workspace";
 }
 
-const RESPONSE_CACHE_SETTING_KEY = "relay-save-responses";
-const MOCK_SERVER_PORT_KEY = "relay-mock-server-port";
-const SAFE_MODE_KEY_PREFIX = "relay-safe-mode:";
-
-// Deliberately keyed by workspace dir and stored ONLY in localStorage — never
-// inside the workspace's own committed files. This is a local trust decision
-// about scripts from a collection someone else authored; if it were stored
-// in the workspace itself, the collection's author could just ship
-// safeMode: false in the file and silently disable the protection for
-// everyone who opens it. Defaults to Safe Mode ON for every workspace,
-// including one with no dir yet (the in-memory/demo case).
-function safeModeKey(dir: string | null): string {
-  return SAFE_MODE_KEY_PREFIX + (dir || "__no_dir__");
-}
-
-type CachedResponse =
-  | { kind: "http"; response: ResponseState }
-  | { kind: "grpc"; lastResponse: GrpcResponseSummary };
-
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [workspace, setWorkspace] = useState<Workspace>({ name: "My Workspace", tree: [], variables: [newRow()], environments: [], activeEnvironmentId: null, protoLibrary: [] });
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
@@ -216,106 +146,38 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [openTick, setOpenTick] = useState(0);
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
-  const [pendingImport, setPendingImport] = useState<{ tree: TreeNode[]; variables: KVRow[]; targetFolderId?: string } | null>(null);
-  const [pendingExport, setPendingExport] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
   const [runnerOpen, setRunnerOpen] = useState(false);
   const [envModalTarget, setEnvModalTarget] = useState<{ tab: string; key?: string } | null>(null);
   const [curlImportOpen, setCurlImportOpen] = useState(false);
   const [curlImportParentId, setCurlImportParentId] = useState<string | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
-  const [responseCacheEnabled, setResponseCacheEnabledState] = useState(() => localStorage.getItem(RESPONSE_CACHE_SETTING_KEY) !== "false");
-  const [mockServerPort, setMockServerPort] = useState<number>(() => Number(localStorage.getItem(MOCK_SERVER_PORT_KEY)) || 4010);
-  const [mockServerRunningPort, setMockServerRunningPort] = useState<number | null>(null);
-  const [mockServerError, setMockServerError] = useState<string | null>(null);
-  const [safeMode, setSafeModeState] = useState<boolean>(() => localStorage.getItem(safeModeKey(null)) !== "false");
-  const [cookies, setCookies] = useState<StoredCookie[]>([]);
   const loaded = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveArgsRef = useRef<{ dir: string; data: string; hidden: boolean } | null>(null);
   const autosavePausedRef = useRef(false);
   const grpcCancelRefs = useRef<Map<string, { current: boolean }>>(new Map());
-  const responseCacheRef = useRef<Record<string, CachedResponse>>({});
 
-  const setResponseCacheEnabled = useCallback((on: boolean) => {
-    localStorage.setItem(RESPONSE_CACHE_SETTING_KEY, String(on));
-    setResponseCacheEnabledState(on);
-  }, []);
-
-  // Reloads this specific workspace's own Safe Mode preference whenever the
-  // open workspace changes — each workspace dir gets an independent local
-  // trust decision, not a single global toggle that'd otherwise leak
-  // whatever was last set into a workspace opened later.
-  useEffect(() => {
-    setSafeModeState(localStorage.getItem(safeModeKey(workspaceDir)) !== "false");
-  }, [workspaceDir]);
-
-  // Local-only cookie jar (see lib/cookies.ts) — loaded per workspace dir,
-  // never part of the .relay files themselves.
-  useEffect(() => {
-    if (!workspaceDir) {
-      setCookies([]);
-      return;
-    }
-    loadCookieJar(workspaceDir)
-      .then((raw) => setCookies(JSON.parse(raw)))
-      .catch(() => setCookies([]));
-  }, [workspaceDir]);
-
-  useEffect(() => {
-    if (!workspaceDir) return;
-    saveCookieJar(workspaceDir, JSON.stringify(cookies)).catch(() => {});
-  }, [cookies, workspaceDir]);
-
-  const setSafeMode = useCallback(
-    (on: boolean) => {
-      localStorage.setItem(safeModeKey(workspaceDir), String(on));
-      setSafeModeState(on);
-    },
-    [workspaceDir]
-  );
-
-  const setMockServerPortPersisted = useCallback((port: number) => {
-    localStorage.setItem(MOCK_SERVER_PORT_KEY, String(port));
-    setMockServerPort(port);
-  }, []);
-
-  const toggleMockServer = useCallback(async () => {
-    setMockServerError(null);
-    try {
-      if (mockServerRunningPort) {
-        await stopMockServerTauri();
-        setMockServerRunningPort(null);
-        return;
-      }
-      if (!workspaceDir) {
-        setMockServerError("Save this workspace to a folder first.");
-        return;
-      }
-      await startMockServerTauri(workspaceDir, mockServerPort);
-      setMockServerRunningPort(mockServerPort);
-    } catch (e: any) {
-      setMockServerError(e?.message || String(e));
-    }
-  }, [mockServerRunningPort, mockServerPort, workspaceDir]);
-
-  useEffect(() => {
-    mockServerStatusTauri().then(setMockServerRunningPort).catch(() => {});
-  }, []);
-
-  const persistResponseCache = useCallback((dir: string) => {
-    saveResponseCache(dir, JSON.stringify(responseCacheRef.current)).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (!workspaceDir) {
-      responseCacheRef.current = {};
-      return;
-    }
-    loadResponseCache(workspaceDir)
-      .then((raw) => { responseCacheRef.current = JSON.parse(raw); })
-      .catch(() => { responseCacheRef.current = {}; });
-  }, [workspaceDir]);
+  const { cookies, setCookies } = useCookieJar(workspaceDir);
+  const { mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer } = useMockServer(workspaceDir);
+  const { safeMode, setSafeMode } = useSafeMode(workspaceDir);
+  const { responseCacheEnabled, setResponseCacheEnabled, responseCacheRef, persistResponseCache } = useResponseCache(workspaceDir);
+  const { setVariables, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, applyVariableChanges } =
+    useEnvironments(workspace, setWorkspace);
+  const { addFolder, addRequest, addGrpcRequest, renameNode, duplicateNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, moveNodes, setProtoLibrary } =
+    useTreeActions(workspace, setWorkspace, setTabs, setActiveTabId);
+  const {
+    importCollection,
+    importIntoFolder,
+    pendingImport,
+    confirmImport,
+    cancelImport,
+    importError,
+    dismissImportError,
+    exportCollection,
+    pendingExport,
+    confirmExport,
+    cancelExport,
+  } = useImportExport(workspace, setWorkspace);
 
   useEffect(() => {
     (async () => {
@@ -458,82 +320,6 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setWorkspace((ws) => ({ ...ws, name: name.trim() || ws.name }));
   }, []);
 
-  const addFolder = useCallback((parentId: string | null) => {
-    const node: FolderNode = { id: uid(), kind: "folder", name: "New Folder", children: [] };
-    setWorkspace((ws) => ({ ...ws, tree: insertAt(ws.tree, parentId, node) }));
-    return node.id;
-  }, []);
-
-  const addRequest = useCallback((parentId: string | null, preset?: { name: string; request: RequestData }) => {
-    const node: RequestNode = {
-      id: uid(),
-      kind: "request",
-      name: preset?.name || "New Request",
-      request: preset?.request ?? defaultRequest("GET", ""),
-    };
-    setWorkspace((ws) => ({ ...ws, tree: insertAt(ws.tree, parentId, node) }));
-    return node.id;
-  }, []);
-
-  const addGrpcRequest = useCallback((parentId: string | null) => {
-    const node: GrpcRequestNode = { id: uid(), kind: "grpc", name: "New gRPC Request", request: defaultGrpcRequest() };
-    setWorkspace((ws) => ({ ...ws, tree: insertAt(ws.tree, parentId, node) }));
-    return node.id;
-  }, []);
-
-  const renameNode = useCallback((id: string, name: string) => {
-    setWorkspace((ws) => ({
-      ...ws,
-      tree: mapTree(ws.tree, id, (n) => ({ ...n, name }) as TreeNode),
-    }));
-  }, []);
-
-  const duplicateNode = useCallback(
-    (id: string): string | null => {
-      const original = findNode(workspace.tree, id);
-      if (!original) return null;
-      const parentId = findParentFolderId(workspace.tree, id);
-      const clone = { ...cloneWithFreshIds(original), name: `${original.name} copy` };
-      setWorkspace((ws) => ({ ...ws, tree: insertAt(ws.tree, parentId, clone) }));
-      return clone.id;
-    },
-    [workspace.tree]
-  );
-
-  const deleteNode = useCallback((id: string) => {
-    setWorkspace((ws) => ({ ...ws, tree: mapTree(ws.tree, id, () => null) }));
-    setTabs((t) => t.filter((tab) => tab.nodeId !== id));
-    setActiveTabId((cur) => (cur === id ? null : cur));
-  }, []);
-
-  const deleteNodes = useCallback((ids: string[]) => {
-    const idSet = new Set(ids);
-    const remove = (nodes: TreeNode[]): TreeNode[] => {
-      const out: TreeNode[] = [];
-      for (const n of nodes) {
-        if (idSet.has(n.id)) continue;
-        out.push(n.kind === "folder" ? { ...n, children: remove(n.children) } : n);
-      }
-      return out;
-    };
-    setWorkspace((ws) => ({ ...ws, tree: remove(ws.tree) }));
-    setTabs((t) => t.filter((tab) => !idSet.has(tab.nodeId)));
-    setActiveTabId((cur) => (cur && idSet.has(cur) ? null : cur));
-  }, []);
-
-  const toggleCollapse = useCallback((id: string) => {
-    setWorkspace((ws) => ({
-      ...ws,
-      tree: mapTree(ws.tree, id, (n) => (n.kind === "folder" ? { ...n, collapsed: !n.collapsed } : n)),
-    }));
-  }, []);
-
-  const collapseAllFolders = useCallback(() => {
-    const collapseAll = (nodes: TreeNode[]): TreeNode[] =>
-      nodes.map((n) => (n.kind === "folder" ? { ...n, collapsed: true, children: collapseAll(n.children) } : n));
-    setWorkspace((ws) => ({ ...ws, tree: collapseAll(ws.tree) }));
-  }, []);
-
   const openTab = useCallback(
     (id: string) => {
       const node = findNode(workspace.tree, id);
@@ -566,7 +352,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setActiveTabId(id);
       setOpenTick((t) => t + 1);
     },
-    [workspace.tree, responseCacheEnabled]
+    [workspace.tree, responseCacheEnabled, responseCacheRef]
   );
 
   // Switching to a tab that's already open (clicked directly in the tab bar,
@@ -660,175 +446,6 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     [pendingCloseId, saveTab, forceCloseTab]
   );
 
-  const setVariables = useCallback((rows: ReturnType<typeof newRow>[]) => {
-    setWorkspace((ws) => ({ ...ws, variables: rows.length ? rows : [newRow()] }));
-  }, []);
-
-  const setProtoLibrary = useCallback((files: { name: string; content: string }[]) => {
-    setWorkspace((ws) => ({ ...ws, protoLibrary: files }));
-  }, []);
-
-  const addEnvironment = useCallback(() => {
-    const name = "New Environment";
-    const env: Environment = { id: uid(), name, variables: [newRow()] };
-    setWorkspace((ws) => ({
-      ...ws,
-      environments: [...ws.environments, env],
-      activeEnvironmentId: env.id,
-    }));
-    return env.id;
-  }, []);
-
-  const deleteEnvironment = useCallback((id: string) => {
-    setWorkspace((ws) => ({
-      ...ws,
-      environments: ws.environments.filter((e) => e.id !== id),
-      activeEnvironmentId: ws.activeEnvironmentId === id ? null : ws.activeEnvironmentId,
-    }));
-  }, []);
-
-  const renameEnvironment = useCallback((id: string, name: string) => {
-    setWorkspace((ws) => ({
-      ...ws,
-      environments: ws.environments.map((e) => (e.id === id ? { ...e, name } : e)),
-    }));
-  }, []);
-
-  const setActiveEnvironment = useCallback((id: string | null) => {
-    setWorkspace((ws) => ({ ...ws, activeEnvironmentId: id }));
-  }, []);
-
-  const setEnvironmentVariables = useCallback((envId: string, rows: KVRow[]) => {
-    setWorkspace((ws) => ({
-      ...ws,
-      environments: ws.environments.map((e) =>
-        e.id === envId ? { ...e, variables: rows.length ? rows : [newRow()] } : e
-      ),
-    }));
-  }, []);
-
-  const moveNodes = useCallback((nodeIds: string[], targetId: string, position: "before" | "after" | "inside") => {
-    setWorkspace((ws) => {
-      const idSet = new Set(nodeIds.filter((id) => id !== targetId));
-      if (idSet.size === 0) return ws;
-
-      // Never drop a folder into its own descendant — checked against every dragged node.
-      const hasDescendant = (nodes: TreeNode[], id: string): boolean => {
-        for (const n of nodes) {
-          if (n.id === id) return true;
-          if (n.kind === "folder" && hasDescendant(n.children, id)) return true;
-        }
-        return false;
-      };
-      for (const id of idSet) {
-        const drag = findNode(ws.tree, id);
-        if (drag?.kind === "folder" && hasDescendant((drag as FolderNode).children, targetId)) return ws;
-      }
-
-      // Collect dragged nodes in their original tree order (not selection-click order)
-      // so a multi-select drag preserves relative ordering at the destination.
-      const removed: TreeNode[] = [];
-      const remove = (nodes: TreeNode[]): TreeNode[] => {
-        const out: TreeNode[] = [];
-        for (const n of nodes) {
-          if (idSet.has(n.id)) { removed.push(n); continue; }
-          out.push(n.kind === "folder" ? { ...n, children: remove(n.children) } : n);
-        }
-        return out;
-      };
-      let tree = remove(ws.tree);
-      if (removed.length === 0) return ws;
-
-      if (position === "inside") {
-        const insert = (nodes: TreeNode[]): TreeNode[] =>
-          nodes.map(n => n.id === targetId && n.kind === "folder"
-            ? { ...n, children: [...n.children, ...removed], collapsed: false }
-            : n.kind === "folder" ? { ...n, children: insert(n.children) } : n);
-        return { ...ws, tree: insert(tree) };
-      }
-
-      const insertAdj = (nodes: TreeNode[]): TreeNode[] => {
-        const out: TreeNode[] = [];
-        for (const n of nodes) {
-          if (n.id === targetId) {
-            if (position === "before") out.push(...removed);
-            out.push(n.kind === "folder" ? { ...n, children: insertAdj(n.children) } : n);
-            if (position === "after") out.push(...removed);
-          } else {
-            out.push(n.kind === "folder" ? { ...n, children: insertAdj(n.children) } : n);
-          }
-        }
-        return out;
-      };
-      return { ...ws, tree: insertAdj(tree) };
-    });
-  }, []);
-
-  const parseImportSource = useCallback(async (): Promise<{ tree: TreeNode[]; variables: KVRow[] } | null> => {
-    const path = await pickCollectionFile();
-    if (!path) return null;
-    const raw = await readFileAtPath(path);
-    const data = parseCollectionFile(raw);
-    if (isPostmanCollection(data)) {
-      const { tree } = postmanToTree(data);
-      return { tree, variables: [] };
-    } else if (isRelayWorkspace(data)) {
-      return { tree: data.tree, variables: [] };
-    } else if (isOpenApiSpec(data)) {
-      const { tree, variables } = parseOpenApiSpec(data);
-      return { tree, variables };
-    }
-    throw new Error("Unrecognized format");
-  }, []);
-
-  const importCollection = useCallback(async () => {
-    try {
-      const result = await parseImportSource();
-      if (result) setPendingImport(result);
-    } catch (e: any) {
-      setImportError(e.message || String(e));
-    }
-  }, [parseImportSource]);
-
-  // Same file picker + parse, but new (unmatched) requests land inside this
-  // specific folder instead of mirroring the incoming spec's own grouping.
-  const importIntoFolder = useCallback(
-    async (folderId: string) => {
-      try {
-        const result = await parseImportSource();
-        if (result) setPendingImport({ ...result, targetFolderId: folderId });
-      } catch (e: any) {
-        setImportError(e.message || String(e));
-      }
-    },
-    [parseImportSource]
-  );
-
-  const cancelImport = useCallback(() => setPendingImport(null), []);
-  const dismissImportError = useCallback(() => setImportError(null), []);
-
-  // Merges only the requests the user checked in the picker into the
-  // existing workspace tree (matched by method+URL, see mergeImport.ts) —
-  // re-importing the same spec updates in place instead of duplicating.
-  const confirmImport = useCallback(
-    (selectedIds: Set<string>): { added: number; updated: number } => {
-      if (!pendingImport) return { added: 0, updated: 0 };
-      const selectedTree = filterTreeBySelection(pendingImport.tree, selectedIds);
-      const basePath = pendingImport.targetFolderId ? findFolderPath(workspace.tree, pendingImport.targetFolderId) || [] : [];
-      const merged = mergeIncomingTree(workspace.tree, selectedTree, basePath);
-      const existingKeys = new Set(workspace.variables.map((v) => v.key));
-      const newVars = pendingImport.variables.filter((v) => !existingKeys.has(v.key));
-      setWorkspace((ws) => ({ ...ws, tree: merged.tree, variables: [...ws.variables, ...newVars] }));
-      setPendingImport(null);
-      return { added: merged.added, updated: merged.updated };
-    },
-    [pendingImport, workspace.tree, workspace.variables]
-  );
-
-  const exportCollection = useCallback(() => setPendingExport(true), []);
-
-  const cancelExport = useCallback(() => setPendingExport(false), []);
-
   const openCompare = useCallback(() => setCompareOpen(true), []);
   const openRunner = useCallback(() => setRunnerOpen(true), []);
   const closeRunner = useCallback(() => setRunnerOpen(false), []);
@@ -840,54 +457,6 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setCurlImportOpen(true);
   }, []);
   const closeCurlImport = useCallback(() => setCurlImportOpen(false), []);
-
-  const confirmExport = useCallback(
-    async (selectedIds: Set<string>): Promise<{ skippedGrpcCount: number } | null> => {
-      const selectedTree = filterTreeBySelection(workspace.tree, selectedIds);
-      const name = workspace.name?.trim() || "Relay Collection";
-      const fileSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "collection";
-      const path = await pickSavePath(`${fileSlug}.relay_collection.json`);
-      setPendingExport(false);
-      if (!path) return null;
-      const { collection, skippedGrpcCount } = treeToPostman(selectedTree, name);
-      await writeFileAtPath(path, JSON.stringify(collection, null, 2));
-      return { skippedGrpcCount };
-    },
-    [workspace.tree, workspace.name]
-  );
-
-  // A pre-request/test script's pm.variables.set(...) needs to persist, but
-  // must land back in whichever scope the variable actually came from — not
-  // get flattened into Globals just because it was merged in for send-time
-  // substitution (see systematic-debugging session note: this used to
-  // silently copy the whole active-environment pool into Globals on every
-  // single send).
-  const applyVariableChanges = useCallback(
-    (changed: Record<string, string>) => {
-      if (!Object.keys(changed).length) return;
-      const activeEnv = workspace.environments.find((e) => e.id === workspace.activeEnvironmentId);
-      const envKeys = new Set((activeEnv?.variables ?? []).map((v) => v.key));
-      const globalChanges: Record<string, string> = {};
-      const envChanges: Record<string, string> = {};
-      for (const [k, v] of Object.entries(changed)) {
-        if (envKeys.has(k)) envChanges[k] = v;
-        else globalChanges[k] = v;
-      }
-      if (Object.keys(globalChanges).length) {
-        const existingKeys = new Set(workspace.variables.map((r) => r.key));
-        const updated = workspace.variables.map((r) => (globalChanges[r.key] !== undefined ? { ...r, value: globalChanges[r.key] } : r));
-        const additions = Object.entries(globalChanges)
-          .filter(([k]) => !existingKeys.has(k))
-          .map(([k, v]) => ({ id: uid(), key: k, value: v, enabled: true }));
-        setVariables([...updated, ...additions]);
-      }
-      if (activeEnv && Object.keys(envChanges).length) {
-        const updated = activeEnv.variables.map((r) => (envChanges[r.key] !== undefined ? { ...r, value: envChanges[r.key] } : r));
-        setEnvironmentVariables(activeEnv.id, updated);
-      }
-    },
-    [workspace.variables, workspace.environments, workspace.activeEnvironmentId, setVariables, setEnvironmentVariables]
-  );
 
   const sendTab = useCallback(
     async (id: string) => {
@@ -911,7 +480,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         persistResponseCache(workspaceDir);
       }
     },
-    [tabs, workspace.variables, workspace.environments, workspace.activeEnvironmentId, applyVariableChanges, responseCacheEnabled, workspaceDir, persistResponseCache, safeMode, cookies]
+    [tabs, workspace.variables, workspace.environments, workspace.activeEnvironmentId, applyVariableChanges, responseCacheEnabled, workspaceDir, persistResponseCache, safeMode, cookies, setCookies, responseCacheRef]
   );
 
   const cacheGrpcResponse = useCallback(
@@ -920,7 +489,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       responseCacheRef.current[id] = { kind: "grpc", lastResponse };
       persistResponseCache(workspaceDir);
     },
-    [responseCacheEnabled, workspaceDir, persistResponseCache]
+    [responseCacheEnabled, workspaceDir, persistResponseCache, responseCacheRef]
   );
 
   const sendGrpcTab = useCallback(
@@ -1008,7 +577,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       responseCacheEnabled,
       setResponseCacheEnabled,
       mockServerPort,
-      setMockServerPort: setMockServerPortPersisted,
+      setMockServerPort,
       mockServerRunningPort,
       mockServerError,
       toggleMockServer,
@@ -1076,7 +645,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       moveNodes,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPortPersisted, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

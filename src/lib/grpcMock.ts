@@ -36,11 +36,6 @@ export const MOCK_GRPC_SERVICES: GrpcServiceDef[] = [
   },
 ];
 
-export function findMockMethod(serviceName: string, methodName: string): GrpcMethodDef | null {
-  const service = MOCK_GRPC_SERVICES.find((s) => s.name === serviceName);
-  return service?.methods.find((m) => m.name === methodName) ?? null;
-}
-
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

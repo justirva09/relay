@@ -5,6 +5,7 @@ import { runInSandbox } from "./scriptSandbox";
 import { AuthConfig, Example, KVRow, RequestData, ResponseState, SentRequest, StoredCookie, Workspace, encodeUrlencodedRows } from "../types";
 import { signAwsSigV4 } from "./awsSigV4";
 import { buildCookieHeaderValue, matchCookiesForUrl, mergeCookies, parseSetCookieHeader } from "./cookies";
+import { toBase64 } from "./base64";
 
 const scriptRequire = (name: string) => {
   const libs: Record<string, any> = { "crypto-js": CryptoJS };
@@ -78,10 +79,6 @@ function withOverrideOrigin(url: string, origin: string): string {
   } catch {
     return url;
   }
-}
-
-function toBase64(str: string): string {
-  return btoa(unescape(encodeURIComponent(str)));
 }
 
 // The Auth tab is the source of truth for the Authorization header when set

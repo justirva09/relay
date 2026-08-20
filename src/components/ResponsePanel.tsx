@@ -4,6 +4,7 @@ import { isJson } from "./JsonTree";
 import CodeView from "./CodeView";
 import { useTextHighlight } from "../lib/useTextHighlight";
 import { registerAction, setActiveSearchRegion } from "../lib/keybindings";
+import { toBase64 } from "../lib/base64";
 import ToggleSwitch from "./ToggleSwitch";
 
 type BodyFormat = "json" | "html" | "xml" | "javascript" | "raw" | "hex" | "base64";
@@ -42,13 +43,6 @@ function toHexDump(text: string): string {
     lines.push(`${offset}  ${hex}  ${ascii}`);
   }
   return lines.join("\n") || "(empty body)";
-}
-
-function toBase64(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-  let binary = "";
-  bytes.forEach((b) => (binary += String.fromCharCode(b)));
-  return btoa(binary);
 }
 
 // The exact text each format branch below renders — shared with the Copy

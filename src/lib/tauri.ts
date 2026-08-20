@@ -67,10 +67,6 @@ export async function loadWorkspaceFile(): Promise<string | null> {
   return raw;
 }
 
-export function saveWorkspaceFile(data: string): Promise<void> {
-  return invoke("save_workspace", { data });
-}
-
 export async function pickWorkspaceFolder(): Promise<string | null> {
   const result = await open({ directory: true, multiple: false });
   return result as string | null;
@@ -167,10 +163,6 @@ export interface GitStatusInfo {
 
 export function gitStatus(dir: string): Promise<GitStatusInfo | null> {
   return invoke("git_status", { dir });
-}
-
-export function gitCommit(dir: string, message: string): Promise<void> {
-  return invoke("git_commit", { dir, message });
 }
 
 export function gitInit(dir: string): Promise<void> {

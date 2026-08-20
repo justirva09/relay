@@ -1,6 +1,7 @@
 import { KVRow, RequestData, ResponseState, StoredCookie, TreeNode, normalizeRequestData } from "../types";
 import { runRequest } from "./useSendRequest";
 import { APP_ICON_DATA_URI } from "../assets/appIconDataUri";
+import { escapeHtml } from "./highlight";
 
 export interface RunnerRequestRef {
   id: string;
@@ -243,7 +244,6 @@ export function generateHtmlReport(results: RunnerResult[], meta?: ReportMeta): 
   const data = buildReportData(results);
   const embeddedData = JSON.stringify(data).replace(/</g, "\\u003c");
 
-  const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const include = meta?.tagFilter?.include ?? [];
   const exclude = meta?.tagFilter?.exclude ?? [];
   const subtitle =

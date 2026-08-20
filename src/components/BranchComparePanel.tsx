@@ -376,8 +376,11 @@ export default function BranchComparePanel({ onClose }: { onClose: () => void })
         </div>
       </div>
 
-      <div className="px-6 py-4 flex items-center gap-3 border-b border-th-border shrink-0 bg-th-bg">
-        <SimpleSelect value={base} onChange={setBase} options={branchOptions} className="w-56" />
+      <div className="px-6 py-4 flex items-end gap-3 border-b border-th-border shrink-0 bg-th-bg">
+        <div>
+          <label className="block text-[10.5px] font-mono text-th-text-4 uppercase tracking-wide mb-1">Source</label>
+          <SimpleSelect value={base} onChange={setBase} options={branchOptions} className="w-56" />
+        </div>
         <button
           title="Swap branches"
           onClick={() => {
@@ -393,9 +396,12 @@ export default function BranchComparePanel({ onClose }: { onClose: () => void })
             <path d="M21 13v2a4 4 0 0 1-4 4H3" />
           </svg>
         </button>
-        <SimpleSelect value={compare} onChange={setCompare} options={branchOptions} className="w-56" />
+        <div>
+          <label className="block text-[10.5px] font-mono text-th-text-4 uppercase tracking-wide mb-1">Target</label>
+          <SimpleSelect value={compare} onChange={setCompare} options={branchOptions} className="w-56" />
+        </div>
         {compare === currentBranch && (
-          <span className="text-[11.5px] font-mono text-th-text-4 bg-th-surface border border-th-border rounded-md px-2 py-1">includes uncommitted changes</span>
+          <span className="text-[11.5px] font-mono text-th-text-4 bg-th-surface border border-th-border rounded-md px-2 py-1 mb-0.5">includes uncommitted changes</span>
         )}
       </div>
 
