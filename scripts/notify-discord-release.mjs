@@ -26,6 +26,8 @@ const GDRIVE_CLIENT_SECRET = process.env.GDRIVE_CLIENT_SECRET;
 const GDRIVE_REFRESH_TOKEN = process.env.GDRIVE_REFRESH_TOKEN;
 const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
 const GITHUB_EVENT_PATH = requireEnv("GITHUB_EVENT_PATH");
+const GITHUB_REPOSITORY = requireEnv("GITHUB_REPOSITORY");
+const RELEASE_TAG = process.env.RELEASE_TAG;
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -159,14 +161,36 @@ async function postToDiscord(release, links) {
   if (!res.ok) throw new Error(`Discord webhook returned ${res.status}: ${await res.text()}`);
 }
 
+// workflow_dispatch (manual retry) has no `release` object in its event
+// payload — only the `tag` input we defined in the workflow. Look the
+// release up by tag via the API instead, the same way the `published`
+// event's payload would already have handed it to us.
+async function fetchReleaseByTag(tag) {
+  const res = await fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${encodeURIComponent(tag)}`, {
+    headers: {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "relay-release-notify",
+    },
+  });
+  if (!res.ok) throw new Error(`Failed to look up release for tag "${tag}": ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
 async function main() {
   if (!DISCORD_WEBHOOK_URL) warnAndExit("DISCORD_WEBHOOK_URL secret not set — skipping.");
   if (!GDRIVE_CLIENT_ID || !GDRIVE_CLIENT_SECRET || !GDRIVE_REFRESH_TOKEN || !GDRIVE_FOLDER_ID) {
     warnAndExit("GDRIVE_CLIENT_ID/GDRIVE_CLIENT_SECRET/GDRIVE_REFRESH_TOKEN/GDRIVE_FOLDER_ID secret not set — skipping.");
   }
 
-  const event = JSON.parse(fs.readFileSync(GITHUB_EVENT_PATH, "utf8"));
-  const release = event.release;
+  let release;
+  if (RELEASE_TAG) {
+    console.log(`Manual run — looking up release for tag "${RELEASE_TAG}"...`);
+    release = await fetchReleaseByTag(RELEASE_TAG);
+  } else {
+    const event = JSON.parse(fs.readFileSync(GITHUB_EVENT_PATH, "utf8"));
+    release = event.release;
+  }
   const assets = release.assets || [];
 
   const picked = ASSET_PICKS.map(([label, test]) => [label, assets.find((a) => test(a.name.toLowerCase()))]).filter(([, asset]) => asset);

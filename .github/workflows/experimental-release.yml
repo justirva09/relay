@@ -1,6 +1,8 @@
 name: Experimental Release
 
-# Runs automatically on every merge to main. No semantic-release / conventional
+# Manual only — run from the Actions tab when you actually want a new
+# experimental build (was auto-on-every-push-to-main; that fired way more
+# often than a build was actually wanted). No semantic-release / conventional
 # commits here — it just takes whatever base version is in package.json
 # (e.g. "0.2.0"), finds the latest "vBASE-N" tag, and bumps N by one. Builds
 # macOS (universal) + Windows and uploads to a draft GitHub Release for
@@ -12,8 +14,7 @@ name: Experimental Release
 # The "experimental" labeling still shows up in the release title/body and
 # the prerelease/draft flags, just not baked into the semver string itself.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 # Prevent two runs from computing/pushing the same next tag at once —
 # queue pushes to main instead of racing each other on tag numbering.

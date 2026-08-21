@@ -15,6 +15,16 @@ name: Discord Release Notify
 on:
   release:
     types: [published]
+  # Manual retry/re-run for an existing release — e.g. the Drive upload
+  # failed partway (quota, network) or you just want to re-post without
+  # publishing a whole new release. Picking the release up by tag here
+  # instead of relying on the `release` event payload, which workflow_dispatch
+  # never has.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re-)notify, e.g. v0.2.0-17"
+        required: true
 
 jobs:
   notify:
@@ -35,4 +45,5 @@ jobs:
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
           GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: node scripts/notify-discord-release.mjs
