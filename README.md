@@ -1,74 +1,66 @@
 # Relay
 
-A lightweight, Postman-style desktop client built with **Tauri v2 + React + TypeScript + Rust**.
+A lightweight, Postman-style desktop API client — built with **Tauri v2 + React + TypeScript + Rust**.
 
-Requests run **natively through Rust** (`reqwest` for HTTP, `tonic`/`prost` for gRPC) instead of the browser's `fetch()` — no CORS restrictions, and lighter/faster than a webview-based or Electron app.
+Requests run **natively through Rust** (`reqwest` for HTTP, `tonic`/`prost` for gRPC) instead of a browser's `fetch()` — no CORS restrictions, and lighter/faster than a webview-based or Electron app. Collections are stored as **plain-text `.relay` files**, so diffs stay small and workspaces version cleanly with git.
 
-Collections are stored as **plain-text `.relay` files** (one file per request/folder/environment), so diffs stay small and workspaces can be versioned and shared with git like regular source code.
+<!-- TODO(image): banner/hero screenshot of the app here -->
+
+## Why Relay
+
+- **Git-native by design** — one file per request/folder/environment, not a single JSON blob. Reviewable diffs, no merge-conflict nightmares.
+- **Native networking** — real Rust HTTP/gRPC clients, not a sandboxed webview fetch.
+- **No account required to use it** — core HTTP/gRPC client is fully local and free.
+
+<!-- TODO(image): screenshot of a request + response side by side -->
 
 ## Features
 
-### HTTP
-- Sidebar collections: folders & requests, nested, rename (double-click), delete, collapse
-- Multi-tab requests with unsaved-change indicator (`●`)
-- Params ⟷ URL two-way sync (Postman-style), auto-adds a new row as you type
-- **Path variables**: `:id`-style segments in the URL are auto-detected, highlighted, and get their own tab to fill in values
-- Body modes: none, JSON, raw text, `x-www-form-urlencoded`, and multipart form-data (including real file uploads picked from disk); **Prettify** button for JSON bodies
-- **Bulk Edit** for headers and params — switch to a raw `key: value` per line view, `//`-prefix a line to disable that row
-- Auto-generated headers (`User-Agent`, `Content-Type`, `Host`, `Content-Length`) shown read-only when not set manually; toggleable
-- **Drag & drop** to reorder requests/folders or move them into another folder — supports multi-select (⌘/Ctrl-click, Shift-click for a range) so a whole batch moves together; order is saved automatically
-- Import Postman Collections (v2.1) or OpenAPI 3.x specs (JSON/YAML); export back out to a Relay collection file
-- Default `User-Agent: Relay/x.y.z` sent unless overridden — keeps APIs that reject clientless requests (e.g. GitHub REST API) working out of the box
-- Pre-request & test scripts with a mini `pm` API, including autocomplete:
-  - `pm.environment.get/set/unset`, `pm.variables.get/set`
-  - `pm.request.method/url/body`, `pm.request.headers.add/upsert/remove/get`
-  - `pm.response.code/status/responseTime/json()/text()/headers.get()`
-  - `pm.test(name, fn)`, `pm.expect(x).to.equal/include/be.above/below/a/ok`
-- `{{variable}}` autocomplete & syntax highlighting in URL, headers, and params
-- Environment & global variables panel
-- Response viewer: status, time, size, body, headers, test results, console log
-- Optional local response caching (toggle in Settings) — responses persist across restarts, never committed to git
+**HTTP**
+- Collections sidebar (folders, requests, drag-and-drop reorder/move, multi-select)
+- Params ⟷ URL two-way sync, path variables (`:id`), bulk edit mode
+- Body: JSON, raw, form-urlencoded, multipart (real file uploads)
+- **Auth tab**: Bearer, Basic, AWS SigV4, OAuth2 (Authorization Code + PKCE)
+- Pre-request & test scripts (`pm` API, Postman-compatible subset) with autocomplete
+- `{{variable}}` autocomplete/highlighting, environment & global variables
+- Import Postman collections (v2.1) and OpenAPI 3.x specs; export back out
 
-### gRPC
-- Unary requests through a native Rust client (`tonic`), two service-discovery modes:
-  - **Server reflection** — auto-detects services/methods from a running server
-  - **Imported `.proto`** — recursively scans and resolves imports like `protoc -I`, for servers with reflection disabled. Well-known types (`google/protobuf/*.proto`, `buf/validate/validate.proto`) are bundled
-  - Imported protos are a shared library at the workspace level (import once, reuse across requests)
-- **Service definition** tab: toggle reflection/imported, searchable method picker grouped by package
-- Response panel: **Response** (status/duration/size, Body/Metadata tabs) vs **Log** (SENT/RECV timeline)
-- **Prettify** button for the message editor
+<!-- TODO(image): Auth tab screenshot -->
 
-### Git-native storage
-- Workspaces save as individual `.relay` files instead of one JSON blob — clean, reviewable git diffs
-- **Flat** (files directly in the project folder) or **Hidden** (`.relay/` subfolder) layout, chosen when creating a workspace; existing folders with other content default to hidden so nothing gets overwritten
-- Secret-marked variables are split into a gitignored `*.secret.relay` file, never committed
-- Built-in **Source Control** panel: current branch, changed-file count, commit from the sidebar
+**gRPC**
+- Unary requests via native Rust client (`tonic`)
+- Server reflection or imported `.proto` (recursive import resolution, well-known types bundled)
+- Response panel with Body/Metadata tabs and a SENT/RECV timeline log
 
-### General
-- Read-only body/response viewer (`CodeView`) with line-number gutter and collapsible object/array folds (VSCode-style)
-- Light/dark theme toggle & Settings
-- Everything autosaves to disk
+<!-- TODO(image): gRPC service picker + response screenshot -->
 
-## Roadmap
-- Streaming gRPC (server-stream/client-stream/bidi) — only unary is implemented so far
-- Auth tab (Bearer/Basic/OAuth) — for now, use Headers or a pre-request script
-- Relay CLI for running collections in CI/CD
-- Docs viewer & local mock server
+**Runner & CI**
+- **Runner**: run a folder/collection end-to-end with pass/fail summary
+- **Relay CLI** (`relay-cli`): headless collection runs for CI/CD pipelines
+- **Contract Check**: diff a live response against an OpenAPI spec
+
+**Mock Server**
+- Serve mock responses locally from a collection, no external server needed
+
+**Git-native storage**
+- `.relay` files, flat or hidden (`.relay/`) layout
+- Secret-marked variables split into a gitignored `*.secret.relay` file
+- Built-in Source Control panel (branch, changed files, commit)
+
+<!-- TODO(image): mock server / runner screenshot -->
+
+## Installation
+
+Download the latest build from [Releases](../../releases) (macOS/Windows/Linux), or build from source below.
 
 ## Development
-
-Prerequisites:
-- Node.js 18+ and npm
-- Rust stable (via [rustup](https://www.rust-lang.org/tools/install))
-- Tauri system dependencies for your OS: see [v2.tauri.app/start/prerequisites](https://v2.tauri.app/start/prerequisites/)
-  (Linux needs `libwebkit2gtk-4.1-dev`, `libssl-dev`, `librsvg2-dev`, `build-essential`, etc.)
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-This opens the desktop app window directly, with hot-reload for the frontend.
+Prerequisites and full contributor workflow: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Production build
 
@@ -76,43 +68,35 @@ This opens the desktop app window directly, with hot-reload for the frontend.
 npm run tauri build
 ```
 
-Installers/executables land in `src-tauri/target/release/bundle/`.
+Installers land in `src-tauri/target/release/bundle/`.
 
-## Releases
+## Roadmap
 
-Two GitHub Actions workflows handle builds:
-
-- **`experimental-release.yml`** — runs automatically on every push to `main`. Builds macOS (universal) + Windows + Linux, auto-bumps an experimental version tag (`v0.2.0-N`), and uploads to a **draft** GitHub Release for manual review before publishing.
-- **`release.yml`** — manual, versioned release. Run from the **Actions** tab, provide a version (e.g. `v0.2.0`), builds the same three platforms and uploads to a draft release.
+- Streaming gRPC (server-stream/client-stream/bidi) — only unary is implemented so far
 
 ## Project structure
 
 ```
 src/                      # frontend — React + TypeScript
-  components/
-    Sidebar.tsx, TabBar.tsx, KeyValueEditor.tsx, CodeEditor.tsx (editable), CodeView.tsx (read-only)
-    RequestPanel.tsx, ResponsePanel.tsx             # HTTP
-    GrpcPanel.tsx, GrpcResponsePanel.tsx,
-    GrpcServicePicker.tsx, GrpcResponseLog.tsx       # gRPC
-    EnvironmentModal.tsx, SettingsModal.tsx, GitPanel.tsx
-  lib/
-    pm.ts                 # pre/post-request script engine
-    pmCompletions.ts       # pm API autocomplete tree
-    useVariableMenu.ts, urlHighlight.tsx  # {{variable}} autocomplete & highlighting
-    tauri.ts, grpcClient.ts # invoke() wrappers to Rust commands
-    useSendRequest.ts      # HTTP orchestration: pre-script -> native request -> test-script
-    highlight.ts           # syntax highlight shared by CodeEditor & CodeView
-  store.tsx               # workspace tree, tabs, proto library, persistence
-  types.ts                # data types + tree helpers
+  components/             # RequestPanel, GrpcPanel, RunnerPanel, EnvironmentModal, etc.
+  lib/                     # pm.ts (script engine), useSendRequest.ts, tauri.ts (invoke wrappers)
+  store.tsx                # workspace tree, tabs, persistence
+  types.ts                 # data types + tree helpers
 
 src-tauri/                # backend — Rust
   src/
-    commands.rs           # http_request command (reqwest, async)
-    grpc.rs                # gRPC reflection client, local .proto parsing (protox), invoke_unary
-    storage.rs             # .relay folder read/write, layout detection, git-ignore setup
-    git.rs                 # in-app git status/commit via the `git` CLI
-    response_cache.rs      # local-only response cache (app data dir)
-    main.rs
-  tauri.conf.json
-  capabilities/default.json
+    commands.rs            # http_request command (reqwest)
+    grpc.rs                 # gRPC reflection + local .proto parsing
+    storage.rs              # .relay folder read/write, git-ignore setup
+    git.rs                  # in-app git status/commit
+    mock_server.rs          # local mock server
+  relay-cli/                # headless CLI, reuses the same Rust core
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Found a security issue? See [SECURITY.md](SECURITY.md) instead of opening a public issue.
+
+## License
+
+[MIT](LICENSE)

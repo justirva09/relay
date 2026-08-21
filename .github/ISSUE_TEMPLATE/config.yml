@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussions
+    url: https://github.com/justirva09/relay/discussions
+    about: Ask general questions or give feedback here.
+  - name: Discord Server
+    url: https://discord.gg/RrSQRdPh7a
+    about: Join our Discord community to chat about Relay.
