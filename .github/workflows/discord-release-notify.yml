@@ -1,0 +1,70 @@
+name: Discord Release Notify
+
+# Fires whenever a release is published — regardless of which workflow
+# created it (release.yml's manual dispatch, or experimental-release.yml's
+# auto-draft-on-merge) and regardless of whether it was published
+# automatically or by clicking "Publish release" on a draft. Draft release
+# assets aren't publicly downloadable, so this deliberately waits for the
+# `published` event rather than `created` — by then every asset's
+# browser_download_url actually works for anyone in Discord.
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post download links to Discord
+        uses: actions/github-script@v7
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        with:
+          script: |
+            const webhook = process.env.DISCORD_WEBHOOK_URL;
+            if (!webhook) {
+              core.warning("DISCORD_WEBHOOK_URL secret not set — skipping Discord notification.");
+              return;
+            }
+
+            const release = context.payload.release;
+            const assets = release.assets || [];
+
+            // One representative installer per platform — tauri-action also
+            // uploads .sig signature files and raw .app.tar.gz/.tar.gz
+            // archives alongside these; only the thing a human actually
+            // downloads and double-clicks belongs in the announcement.
+            const pick = (test) => assets.find((a) => test(a.name.toLowerCase()));
+            const links = [
+              ["macOS (.dmg)", pick((n) => n.endsWith(".dmg"))],
+              ["Windows (.msi)", pick((n) => n.endsWith(".msi"))],
+              ["Linux (.AppImage)", pick((n) => n.endsWith(".appimage"))],
+              ["Linux (.deb)", pick((n) => n.endsWith(".deb"))],
+            ].filter(([, asset]) => asset);
+
+            if (links.length === 0) {
+              core.warning("No recognizable installer assets found on this release — skipping Discord notification.");
+              return;
+            }
+
+            const description = links.map(([label, asset]) => `**${label}** — [Download](${asset.browser_download_url})`).join("\n");
+
+            const payload = {
+              embeds: [
+                {
+                  title: `Relay ${release.tag_name} is out`,
+                  url: release.html_url,
+                  description,
+                  color: 0x5865f2,
+                },
+              ],
+            };
+
+            const res = await fetch(webhook, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (!res.ok) {
+              core.setFailed(`Discord webhook returned ${res.status}: ${await res.text()}`);
+            }
