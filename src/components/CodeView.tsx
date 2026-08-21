@@ -10,10 +10,9 @@ function leadingSpaces(line: string): number {
   return line.match(/^ */)?.[0].length ?? 0;
 }
 
-/// Bracket-matches `{`/`[` block openers to their closers on JSON.stringify(…, null, 2)
-/// output. Every JSON string value stays on a single physical line, so checking the
-/// last non-comma character of a trimmed line is enough to tell a block opener from
-/// a leaf value — a string can never end a line with a bare `{`/`[`.
+/// Bracket-matches `{`/`[` openers to closers on JSON.stringify(..., null, 2) output.
+/// Every string value stays on one line, so the last non-comma char of a trimmed
+/// line tells a block opener from a leaf value.
 function computeFolds(lines: string[]): Map<number, number> {
   const starts: number[] = [];
   const folds = new Map<number, number>();

@@ -8,18 +8,15 @@ name: Discord Release Notify
 # `published` event rather than `created` — by then every asset actually
 # exists as a finished upload on the release.
 #
-# This repo is private, so a release asset's own browser_download_url only
-# works for someone logged into GitHub with repo access — no good for a
-# public Discord channel. scripts/notify-discord-release.mjs re-uploads the
-# installers to a public Google Drive folder and posts those links instead.
+# Relay is a public repo, so each asset's own browser_download_url is
+# already publicly reachable — no re-hosting needed.
 on:
   release:
     types: [published]
-  # Manual retry/re-run for an existing release — e.g. the Drive upload
-  # failed partway (quota, network) or you just want to re-post without
-  # publishing a whole new release. Picking the release up by tag here
-  # instead of relying on the `release` event payload, which workflow_dispatch
-  # never has.
+  # Manual retry/re-run for an existing release — e.g. the webhook post
+  # failed, or you just want to re-post without publishing a whole new
+  # release. Picking the release up by tag here instead of relying on the
+  # `release` event payload, which workflow_dispatch never has.
   workflow_dispatch:
     inputs:
       tag:
@@ -37,13 +34,9 @@ jobs:
         with:
           node-version: 20
 
-      - name: Upload installers to Drive and notify Discord
+      - name: Notify Discord
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
-          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
-          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: node scripts/notify-discord-release.mjs

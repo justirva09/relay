@@ -2,30 +2,22 @@ import { DiffCategory } from "./apiDiff";
 
 export const ALL_CATEGORIES: DiffCategory[] = ["method", "url", "auth", "query", "header", "body"];
 
-// RequestData.url is the single source of truth string — it EMBEDS the
-// query string (params is just a parsed KVRow view kept in sync with it,
-// see RequestPanel's handleParamsChange), so "url changed" and "query
-// changed" aren't actually independent at the string level. Splitting here
-// lets a partial merge recombine the right base path with the right query
-// string instead of picking one whole `url` value and silently dropping
-// the other category's change to it.
+// url embeds the query string, so "url changed" and "query changed" aren't
+// independent at the string level. Splitting here lets a partial merge
+// recombine the right base with the right query instead of picking one
+// whole url value and dropping the other category's change.
 function splitUrl(url: string): { base: string; query: string } {
   const qIndex = url.indexOf("?");
   return qIndex === -1 ? { base: url, query: "" } : { base: url.slice(0, qIndex), query: url.slice(qIndex) };
 }
 
-// Builds the exact file content that should be written to disk (then
-// git-added) so a commit captures only the selected categories from a
-// modified request — everything else keeps its last-commit ("before")
-// value, so it stays a pending unstaged change for a later commit instead
-// of getting swept in silently.
+// Builds file content for a commit that captures only the selected
+// categories. Everything else keeps its before value so it stays a pending
+// unstaged change instead of getting swept in silently.
 //
-// Fields outside the 6 selectable categories (description, pre/test
-// scripts) are NEVER touched by a partial selection — they only move when
-// every category is selected, in which case the whole current file is used
-// as-is (byte-identical, nothing held back). This keeps the "select all"
-// checkbox's meaning literal: it's the only path that can ever carry an
-// edit this feature has no checkbox for.
+// Fields outside the 6 categories (description, scripts) never move unless
+// every category is selected, in which case the whole file goes through
+// as-is. Keeps "select all" meaning exactly that.
 export function mergeSelectedRequestFields(beforeFull: any, afterFull: any, selected: Set<DiffCategory>): any {
   const allSelected = ALL_CATEGORIES.every((c) => selected.has(c));
   if (allSelected) return afterFull;
@@ -65,12 +57,11 @@ const CATEGORY_LABEL: Record<DiffCategory, string> = {
 export interface StagedEntrySummary {
   status: "added" | "removed" | "modified";
   name: string;
-  categories: DiffCategory[]; // for "modified" only — which categories are actually being committed
+  categories: DiffCategory[]; // "modified" only, which categories are being committed
 }
 
-// A starting point for the commit message, not a final answer — names the
-// requests touched and, for modified ones, which categories were actually
-// staged (not just "changed" — only what THIS commit is picking up).
+// Just a starting point, not a final answer. Names the requests touched and
+// which categories are actually staged for this commit.
 export function suggestCommitMessage(entries: StagedEntrySummary[]): string {
   if (!entries.length) return "";
 

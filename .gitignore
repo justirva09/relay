@@ -10,6 +10,8 @@ src-tauri/Cargo.lock
 .DS_Store
 *.log
 
+.claude/
+
 # This repo isn't the Supabase project (that's relay-license-backend) — this
 # only ever shows up if `supabase` CLI commands get run from the wrong
 # directory by accident, same as happened once before.

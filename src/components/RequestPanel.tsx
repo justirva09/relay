@@ -53,17 +53,14 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
   const [oauthLoading, setOauthLoading] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
   const methodColor = METHOD_COLOR[draft.method] || METHOD_COLOR.GET;
-  // Re-renders when sign-in/refresh/expiry changes what hasFeature() returns
-  // — otherwise a stale render would keep showing the pre-login gate state.
+  // re-render on license change, so the gate state doesn't go stale
   const [, forceLicenseRerender] = useState(0);
   useEffect(() => subscribeLicense(() => forceLicenseRerender((n) => n + 1)), []);
 
   const { workspace, mockServerRunningPort, safeMode } = useWorkspace();
   const [showContractCheck, setShowContractCheck] = useState(false);
-  // Grouped by scope so the {{variable}} completion menu can show where each
-  // suggestion comes from — "Global" (workspace-level) plus one group per
-  // environment (named after it, e.g. "Local", "Staging"), regardless of
-  // which environment is currently active.
+  // grouped by scope so the {{variable}} completion menu can show where
+  // each suggestion comes from (Global, or a specific environment)
   const variableGroups = useMemo(() => {
     const groups: VariableGroup[] = [];
     const globalNames = workspace.variables.filter((v) => v.key.trim()).map((v) => v.key);

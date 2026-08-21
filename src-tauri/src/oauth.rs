@@ -38,13 +38,11 @@ fn decode_percent(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-// One-shot local HTTP listener for the OAuth2 Authorization Code + PKCE
-// flow's redirect_uri (http://127.0.0.1:<port>/callback). Bound and awaiting
-// BEFORE the system browser is opened (see lib/oauth2.ts), so there's no
-// race between the provider redirecting back and this being ready to
-// receive it. Hand-parses the raw HTTP request line instead of pulling in a
-// server framework, since all it ever needs to read is one GET request with
-// a query string.
+// One-shot local HTTP listener for the OAuth2 PKCE redirect_uri
+// (127.0.0.1:<port>/callback). Bound before the browser opens, so there's
+// no race with the provider's redirect. Hand-parses the raw request line
+// instead of pulling in a server framework, since it only needs one GET
+// with a query string.
 #[tauri::command]
 pub async fn oauth2_await_callback(port: u16, timeout_secs: u64) -> Result<OAuthCallbackResult, String> {
     let listener = TcpListener::bind(("127.0.0.1", port))

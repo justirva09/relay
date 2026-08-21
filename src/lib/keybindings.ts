@@ -1,11 +1,6 @@
-// A small VS Code-style command system: every rebindable shortcut has a
-// stable action id and a default combo. Whoever actually implements an
-// action (Sidebar, the main tab area, EnvironmentBar, ...) registers a
-// handler for that id wherever it happens to live — the global keydown
-// listener (see useKeybindingDispatcher in App.tsx) never needs to know
-// where an action's logic lives, just which id the pressed combo maps to.
-// This is what makes it "full rebindable from the start": a component can
-// change its own handler freely without ever touching the binding table.
+// Command-id based keybindings, like VS Code. Components register a handler
+// for an action id, the global dispatcher just maps combo -> id -> handler.
+// Keeps the binding table decoupled from wherever an action actually lives.
 
 export interface KeybindingDef {
   id: string;
@@ -61,8 +56,7 @@ export function isCustomized(id: string): boolean {
   return overrides[id] !== undefined;
 }
 
-// Empty string ("") intentionally allowed — that's how a binding gets
-// unassigned (user can clear it without picking a replacement combo).
+// Empty string is a valid combo: that's how a binding gets cleared.
 export function setCombo(id: string, combo: string) {
   overrides = { ...overrides, [id]: combo };
   persist();
@@ -86,11 +80,8 @@ export function subscribeKeybindings(listener: () => void): () => void {
   return () => changeListeners.delete(listener);
 }
 
-// --- Command registry -------------------------------------------------
-// Components register a live handler for an action id while mounted; the
-// global dispatcher just looks up the id the pressed combo resolves to and
-// calls whatever's currently registered (a no-op if nothing is, e.g. no
-// workspace open yet).
+// --- Command registry ---
+// No-op if nothing's registered for an id yet (e.g. no workspace open).
 
 type ActionHandler = () => void;
 const handlers = new Map<string, ActionHandler>();
@@ -109,15 +100,11 @@ export function runAction(id: string): boolean {
   return true;
 }
 
-// --- Contextual search region ------------------------------------------
-// "Search" (mod+f) means different things depending on which pane you're
-// actually working in — the sidebar's request tree, or a response body's
-// own in-content search. Rather than give each its own rebindable slot
-// (which would just show as a confusing "conflict" in Settings for two
-// binds that are never really both live at once), the dispatcher checks
-// this before firing "sidebar.search" and redirects to "response.search"
-// when the response pane is the one you were just in. Panes update this
-// on mouseenter — see Sidebar.tsx / ResponsePanel.tsx.
+// --- Contextual search region ---
+// mod+f means different things in the sidebar vs a response body. Instead of
+// two separate rebindable slots (confusing "conflict" in Settings for binds
+// that are never both live at once), track which pane was last focused and
+// redirect "sidebar.search" to "response.search" when needed.
 export type SearchRegion = "sidebar" | "response";
 let activeSearchRegion: SearchRegion = "sidebar";
 
@@ -129,7 +116,7 @@ export function getActiveSearchRegion(): SearchRegion {
   return activeSearchRegion;
 }
 
-// --- Combo <-> keyboard event -------------------------------------------
+// --- Combo <-> keyboard event ---
 
 export function isMac(): boolean {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -137,9 +124,8 @@ export function isMac(): boolean {
 
 const IGNORED_KEYS = new Set(["control", "meta", "shift", "alt", "os", "contextmenu"]);
 
-// Normalizes a KeyboardEvent into a stable, order-independent string like
-// "mod+shift+s" — "mod" stands for Cmd on macOS / Ctrl elsewhere, so one
-// stored combo works cross-platform without a separate mac/win table.
+// Normalizes a KeyboardEvent to a stable string like "mod+shift+s".
+// "mod" is Cmd on macOS, Ctrl elsewhere, so one combo works on both.
 export function comboFromEvent(e: KeyboardEvent): string {
   const parts: string[] = [];
   if (e.metaKey || e.ctrlKey) parts.push("mod");
@@ -161,8 +147,7 @@ const KEY_LABELS: Record<string, string> = {
   arrowright: "→",
 };
 
-// Splits a combo into display chips, e.g. "mod+shift+s" -> ["⌘","⇧","S"] on
-// macOS or ["Ctrl","Shift","S"] elsewhere.
+// "mod+shift+s" -> ["⌘","⇧","S"] on macOS, ["Ctrl","Shift","S"] elsewhere.
 export function comboToChips(combo: string): string[] {
   if (!combo) return [];
   const mac = isMac();
@@ -174,10 +159,8 @@ export function comboToChips(combo: string): string[] {
   });
 }
 
-// Which action id (if any) the given combo currently triggers — a combo can
-// only ever map to one action at a time (setCombo silently wins the most
-// recent assignment; conflict warnings are surfaced in the Settings UI
-// instead of enforced here).
+// A combo maps to one action at a time. Conflicts aren't blocked here,
+// just surfaced as warnings in the Settings UI.
 export function actionForCombo(combo: string): string | null {
   for (const def of KEYBINDING_DEFS) {
     if (getEffectiveCombo(def.id) === combo) return def.id;

@@ -58,14 +58,10 @@ interface ThemeCtx {
   lightThemeId: ThemeId;
   darkThemeId: ThemeId;
   activeThemeId: ThemeId;
-  // Whether the currently active theme belongs to the dark column — this is
-  // NOT the same as appearanceMode === "dark", since "system" resolves to
-  // one or the other depending on the OS's current setting.
+  // not the same as appearanceMode === "dark", since "system" resolves to either
   isDark: boolean;
   selectTheme: (id: ThemeId) => void;
-  // Quick flip used by the toolbar's single icon button — swaps between
-  // whichever theme was last picked for light vs dark, without opening the
-  // full picker. Distinct from selectTheme, which also pins a specific theme.
+  // toolbar's quick toggle, swaps light/dark without opening the full picker
   toggleTheme: () => void;
 }
 
@@ -86,9 +82,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [darkThemeId, setDarkThemeId] = useState<ThemeId>(() => (localStorage.getItem(DARK_KEY) as ThemeId) || "dark");
   const [systemIsDark, setSystemIsDark] = useState(prefersDark);
 
-  // Only relevant in "system" mode — keeps the app in sync live if the OS
-  // setting changes while Relay is open, instead of only picking it up on
-  // next launch.
+  // only matters in "system" mode, keeps in sync if the OS setting changes mid-session
   useEffect(() => {
     if (!window.matchMedia) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -109,10 +103,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setAppearanceModeState(m);
   };
 
-  // Picking a theme from either column pins appearanceMode to that column
-  // too — clicking a theme should always visibly apply it immediately,
-  // rather than silently updating a "for later" preference while system
-  // mode keeps showing something else.
+  // picking a theme pins appearanceMode too, so it applies immediately instead of
+  // silently saving a "for later" pref while system mode shows something else
   const selectTheme = (id: ThemeId) => {
     if (isDarkThemeId(id)) {
       setDarkThemeId(id);

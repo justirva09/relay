@@ -1,9 +1,7 @@
 import { TestResult } from "../types";
 
-// Same test assertions ran against two response bodies (Mock, Real) —
-// matched by name so a test present on one side but not the other (e.g. the
-// test script itself differs somehow) still shows up instead of silently
-// dropping.
+// Matched by name so a test present on one side but not the other still
+// shows up instead of silently dropping.
 export interface TestComparison {
   name: string;
   mock: boolean | null; // null = this test didn't produce a result on this side
@@ -35,11 +33,10 @@ function joinPath(path: string, key: string): string {
   return path ? `${path}.${key}` : key;
 }
 
-// Walks two JSON values in parallel, flagging every path where the JS type
-// differs (the "total_balance: number in the mock, string in real" case)
-// or a key exists on one side only. Arrays are only compared by their first
-// element's shape — good enough to catch "field renamed/retyped inside a
-// list item" without trying to reconcile differently-sized lists.
+// Walks two JSON values in parallel, flagging type mismatches and keys that
+// only exist on one side. Arrays only compare their first element's shape,
+// good enough to catch a renamed/retyped field without reconciling
+// differently-sized lists.
 function walk(mock: any, real: any, path: string, out: ShapeMismatch[]) {
   const mockType = typeOf(mock);
   const realType = typeOf(real);
@@ -65,8 +62,7 @@ function walk(mock: any, real: any, path: string, out: ShapeMismatch[]) {
   }
 }
 
-// Parses both bodies as JSON and returns every shape mismatch — empty
-// (rather than throwing) when either side isn't JSON, since a contract
+// Returns empty instead of throwing when either side isn't JSON. A contract
 // check on a non-JSON API just has nothing to compare structurally.
 export function diffJsonShape(mockBody: string, realBody: string): ShapeMismatch[] {
   let mock: any;

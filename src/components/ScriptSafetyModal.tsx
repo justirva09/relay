@@ -1,9 +1,8 @@
 import React from "react";
 import { useWorkspace } from "../store";
 
-// The actual picker UI, with no modal chrome — reused both by the
-// standalone ScriptSafetyModal (quick access from the toolbar shield icon)
-// and the Settings window's "Security" section.
+// the actual picker UI with no modal chrome, reused by the standalone
+// ScriptSafetyModal (toolbar shield icon) and Settings' "Security" section
 export function ScriptSafetySettings() {
   const { safeMode, setSafeMode } = useWorkspace();
 

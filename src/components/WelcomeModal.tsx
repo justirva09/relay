@@ -19,11 +19,8 @@ function Card({ icon, title, desc, onClick }: { icon: React.ReactNode; title: st
   );
 }
 
-// First-run onboarding — shown once (tracked via localStorage, not tied to
-// whether a workspace folder has been picked yet) so a fresh install offers
-// the same actionable menu Bruno/Insomnia give new users, instead of the
-// current silent drop into a demo workspace with only a thin "no folder
-// chosen" banner as the only hint anything's unsaved.
+// First-run onboarding, shown once (tracked via localStorage, not tied to
+// whether a workspace folder is picked yet).
 export default function WelcomeModal() {
   const { importCollection, openCurlImport, createWorkspace, addRequest, openTab } = useWorkspace();
   const [dismissed, setDismissed] = useState(() => {
@@ -40,7 +37,7 @@ export default function WelcomeModal() {
     try {
       localStorage.setItem(ONBOARDING_KEY, "1");
     } catch {
-      // localStorage unavailable — worst case this shows again next launch.
+      // localStorage unavailable, worst case this shows again next launch.
     }
     setDismissed(true);
   };

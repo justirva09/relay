@@ -56,10 +56,8 @@ function ThemeColumn({ title, themes, activeId, isActiveColumn, onSelect }: {
   );
 }
 
-// The actual picker UI, with no modal chrome of its own — reused both by
-// the standalone ThemeModal (quick access from the toolbar icon) and the
-// Settings window's "Appearance" section, so there's one source of truth
-// for this instead of two copies drifting apart.
+// The picker UI itself, no modal chrome. Reused by the standalone
+// ThemeModal and Settings' Appearance section so there's one copy.
 export function AppearanceSettings() {
   const { appearanceMode, setAppearanceMode, lightThemeId, darkThemeId, isDark, selectTheme } = useTheme();
 

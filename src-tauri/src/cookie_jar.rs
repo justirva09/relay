@@ -1,8 +1,5 @@
-// Local-only cookie jar, keyed by workspace folder — same reasoning as
-// response_cache.rs: cookies are session state, not something a shared/
-// versioned collection should carry (neither Postman nor Bruno commit
-// cookies into their collection files either — both keep the jar in local
-// app storage). Lives in the app's own data dir, never touches .relay.
+// Local-only cookie jar, keyed by workspace folder. Same reasoning as
+// response_cache.rs: session state doesn't belong in a versioned collection.
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};

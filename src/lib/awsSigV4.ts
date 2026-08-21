@@ -1,11 +1,8 @@
 import { AwsSigV4Config } from "../types";
 
-// AWS Signature Version 4 — computed client-side via WebCrypto rather than
-// in Rust, since the whole point of Relay's HTTP send going through Rust
-// (see useSendRequest.ts) is to avoid the webview's own fetch/CORS layer,
-// not to avoid crypto; SubtleCrypto is a plain Web API available in the
-// Tauri webview regardless. Keeping this in TS also means the secret key
-// never has to cross the JS<->Rust IPC boundary as its own payload field.
+// AWS SigV4, computed client-side via WebCrypto instead of Rust. Sending
+// through Rust is about avoiding the webview's fetch/CORS layer, not crypto,
+// and this way the secret key never has to cross the JS/Rust IPC boundary.
 
 function toHex(buf: ArrayBuffer): string {
   return Array.from(new Uint8Array(buf))
@@ -39,10 +36,7 @@ function canonicalQueryString(search: string): string {
   return pairs.map(([k, v]) => `${k}=${v}`).join("&");
 }
 
-// Returns the extra headers to merge in (Authorization, X-Amz-Date, and
-// X-Amz-Security-Token when a session token is present) — does not mutate
-// the caller's header list itself, matching computeAuthHeader's contract
-// in useSendRequest.ts.
+// returns the extra headers to merge in, doesn't mutate the caller's list
 export async function signAwsSigV4(
   method: string,
   url: string,

@@ -3,9 +3,8 @@ import { VariableInfoEntry } from "../lib/useVariableHover";
 
 const MOD_KEY = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
 
-// Portaled to <body> and pointer-events-none — it must never itself be the
-// thing the mouse is "over", or the geometric hover lookup (useVariableHover)
-// would start reporting the tooltip's own text back instead of the token underneath.
+// pointer-events-none: must never be what the mouse is "over", or the
+// hover lookup picks up the tooltip's own text instead of the token underneath
 export default function VariableHoverTooltip({ x, y, name, info }: { x: number; y: number; name: string; info?: VariableInfoEntry }) {
   return ReactDOM.createPortal(
     <div

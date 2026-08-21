@@ -15,11 +15,8 @@ function StatusChip({ response }: { response: ResponseState | null }) {
   );
 }
 
-// Ephemeral, side-effect-free comparison: sends the exact same request
-// (same testScript too) to the mock server and to whatever the active
-// environment normally resolves to, then diffs the two responses. Nothing
-// here touches the draft, the tab's saved response, or any variable/
-// environment — see useSendRequest.ts's overrideOrigin/mergedVariables.
+// sends the same request to the mock server and the active environment,
+// then diffs the two. side-effect-free, doesn't touch the draft or saved state
 export default function ContractCheckModal({ draft, mockPort, onClose }: { draft: RequestData; mockPort: number; onClose: () => void }) {
   const { workspace, safeMode } = useWorkspace();
   const [mock, setMock] = useState<ResponseState | null>(null);

@@ -16,11 +16,8 @@ import {
 
 const METHODS: Method[] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
-// A small shell-style tokenizer — handles single/double quotes (including a
-// multi-line JSON body pasted inside one quoted --data argument, which is
-// how curl commands are usually copied from API docs) and backslash line
-// continuations (a trailing "\" before a newline, used to spread flags
-// across lines for readability), without needing a real shell to parse it.
+// small shell-style tokenizer: handles quotes (so a multi-line JSON --data
+// body doesn't get split) and backslash line continuations, no real shell needed
 function tokenize(input: string): string[] {
   const tokens: string[] = [];
   let i = 0;
@@ -38,7 +35,7 @@ function tokenize(input: string): string[] {
           token += input[i];
           i++;
         }
-        i++; // closing quote
+        i++;
         sawAnyChar = true;
       } else if (ch === '"') {
         i++;
@@ -51,12 +48,10 @@ function tokenize(input: string): string[] {
             i++;
           }
         }
-        i++; // closing quote
+        i++;
         sawAnyChar = true;
       } else if (ch === "\\" && input[i + 1] === "\n") {
-        // Line continuation outside quotes — ends this token like whitespace
-        // would (the outer while-loop's \s skip then eats the newline and
-        // any leading indentation on the next line).
+        // line continuation, treat like whitespace
         i += 2;
         break;
       } else if (ch === "\\" && i + 1 < n) {
@@ -104,12 +99,8 @@ export interface ParsedCurl {
   request: RequestData;
 }
 
-// Best-effort curl → RequestData conversion — covers the flags people
-// actually paste from API docs/DevTools "Copy as cURL" (method, url,
-// headers, -d/--data variants, -F form fields, -u basic auth, Authorization
-// header lifted into the Auth tab). Flags with no RequestData equivalent
-// (-k, -v, -L, --compressed, ...) are silently ignored rather than rejected,
-// since they don't prevent building a usable request.
+// best-effort curl -> RequestData, covers the flags people actually paste
+// from docs or "Copy as cURL". unknown flags get ignored, not rejected.
 export function parseCurlCommand(input: string): ParsedCurl | null {
   const trimmed = input.trim().replace(/^\$\s*/, "");
   if (!trimmed) return null;
@@ -209,10 +200,8 @@ export function parseCurlCommand(input: string): ParsedCurl | null {
         method = "GET";
         break;
       default:
-        // Flags with no RequestData equivalent (-k/--insecure, -s/--silent,
-        // -v/--verbose, -i/--include, -L/--location, --compressed, ...) are
-        // skipped. A bare non-flag token is the URL, curl accepts it
-        // positionally alongside (or instead of) --url.
+        // unhandled flags (-k, -v, -L, --compressed, ...) just get skipped.
+        // a bare non-flag token is the url
         if (!t.startsWith("-") && !url) url = t;
         break;
     }

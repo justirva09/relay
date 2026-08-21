@@ -284,10 +284,8 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
       .catch(() => {}); // schema is a nicety — keep the plain default message on failure (e.g. unreachable server)
   };
 
-  // Reopening a request that already has a service/method picked (a saved
-  // request, or switching back to a tab) doesn't go through handleSelectMethod
-  // — it needs its own schema fetch so field autocomplete comes back without
-  // the user having to re-pick the method every time.
+  // reopening a saved request with a method already picked skips handleSelectMethod,
+  // needs its own schema fetch so autocomplete comes back without re-picking
   useEffect(() => {
     if (!draft.service || !draft.method) {
       setSchemaFields(undefined);

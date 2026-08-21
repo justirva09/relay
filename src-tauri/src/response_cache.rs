@@ -1,8 +1,6 @@
 // Local-only cache of each request's last response, keyed by workspace
-// folder. Deliberately NOT part of the .relay files — response bodies and
-// timestamps change on every send, which would turn the git-native
-// collection files this app is built around into noisy, unreviewable diffs.
-// Lives in the app's own data dir instead, and is never committed.
+// folder. Kept out of .relay files since response bodies change on every
+// send and would make the git-native collection diffs noisy.
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};

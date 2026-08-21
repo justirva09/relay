@@ -58,12 +58,9 @@ export function useEnvironments(workspace: Workspace, setWorkspace: Dispatch<Set
     [setWorkspace]
   );
 
-  // A pre-request/test script's pm.variables.set(...) needs to persist, but
-  // must land back in whichever scope the variable actually came from — not
-  // get flattened into Globals just because it was merged in for send-time
-  // substitution (see systematic-debugging session note: this used to
-  // silently copy the whole active-environment pool into Globals on every
-  // single send).
+  // pm.variables.set(...) needs to persist back to whichever scope the
+  // variable actually came from, not get flattened into Globals just
+  // because it was merged in for send-time substitution.
   const applyVariableChanges = useCallback(
     (changed: Record<string, string>) => {
       if (!Object.keys(changed).length) return;

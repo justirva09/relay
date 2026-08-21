@@ -50,7 +50,7 @@ export default function StageCommitModal({ branch, onClose, onCommitted }: { bra
       const summary = buildBranchDiffSummary(raw);
       const all = [...summary.breaking, ...summary.safe];
       setEntries(all);
-      // Default: everything selected — matches the old "commit everything" behavior unless you opt to hold something back.
+      // default: everything selected, matches old "commit everything" behavior
       const fields = new Map<string, Set<DiffCategory>>();
       const whole = new Set<string>();
       for (const e of all) {
@@ -124,12 +124,9 @@ export default function StageCommitModal({ branch, onClose, onCommitted }: { bra
     if (!workspaceDir || !rawEntries || !message.trim() || committing) return;
     setCommitting(true);
     setError(null);
-    // The merge→write→add→commit→restore sequence below writes specific
-    // files directly to disk, bypassing React state entirely — if the
-    // app's own debounced autosave (store.tsx) fires mid-sequence, its
-    // full-tree rewrite from the in-memory draft silently clobbers a
-    // carefully-merged partial-field file before `git add` reads it,
-    // dragging unselected field changes into the commit.
+    // This writes files straight to disk, bypassing React state. If the
+    // app's debounced autosave fires mid-sequence it'll overwrite our
+    // carefully-merged file before git add reads it, so pause it.
     pauseAutosave();
     try {
       const pathsToAdd: string[] = [];
@@ -137,10 +134,8 @@ export default function StageCommitModal({ branch, onClose, onCommitted }: { bra
 
       for (const raw of rawEntries) {
         const entry = entries.find((e) => e.path === raw.path);
-        // gRPC entries are always whole-file (see the isWhole comment above)
-        // regardless of add/modify/remove — check wholeSelections for them
-        // too, or a checked "modified" gRPC entry would silently never get
-        // staged at all.
+        // gRPC entries are always whole-file, check wholeSelections for them too
+        // or a checked "modified" gRPC entry never gets staged
         if (raw.status === "added" || raw.status === "removed" || entry?.kind === "grpc") {
           if (!wholeSelections.has(raw.path)) continue;
           pathsToAdd.push(raw.path);
@@ -175,8 +170,7 @@ export default function StageCommitModal({ branch, onClose, onCommitted }: { bra
       await gitAdd(workspaceDir, pathsToAdd);
       await gitCommitStaged(workspaceDir, message.trim());
 
-      // Restore the deselected-field edits in the working tree — they were
-      // only ever swapped out on disk to build what got staged/committed.
+      // put back the deselected-field edits, they were only swapped out to build the commit
       for (const r of restores) await writeFileAtPath(r.path, r.content);
 
       onCommitted();
@@ -209,10 +203,7 @@ export default function StageCommitModal({ branch, onClose, onCommitted }: { bra
           ) : (
             entries.map((entry) => {
               const cats = categoriesOf(entry);
-              // gRPC entries have no field-level diff (categoriesOf is always
-              // empty for them) — always whole-file, regardless of status,
-              // or the tri-state checkbox above would be stuck permanently
-              // unselectable (0 selected === 0 available "categories").
+              // gRPC has no field-level diff, always whole-file or the checkbox gets stuck unselectable
               const isWhole = entry.status !== "modified" || entry.kind === "grpc";
               const selectedCats = fieldSelections.get(entry.path) ?? new Set<DiffCategory>();
               const parentState: "all" | "none" | "partial" = isWhole

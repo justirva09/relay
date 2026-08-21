@@ -1,8 +1,5 @@
 #!/usr/bin/env node
-// Patches the version field in package.json, src-tauri/tauri.conf.json, and
-// src-tauri/Cargo.toml in place via regex (not JSON.parse/stringify) so it
-// doesn't reformat the rest of the file — used both for manual bumps and by
-// the experimental-release CI workflow.
+// patches the version field via regex instead of JSON.parse/stringify so it doesn't reformat the file
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

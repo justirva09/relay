@@ -3,22 +3,19 @@ import { VariableGroup } from "./useVariableMenu";
 
 const TOKEN_RE = /(\{\{[^}]*\}\})|(:[A-Za-z_]\w*)/g;
 
-// Undefined-anywhere check: not in Global and not in any environment. When
-// `variableGroups` isn't passed at all, callers haven't opted into this
-// check (e.g. no workspace context yet) — never flag in that case, since
-// "unknown" isn't the same claim as "confirmed undefined".
+// Checks the variable exists in Global or any environment. If variableGroups
+// isn't passed at all, the caller hasn't opted into this check, so never
+// flag: "unknown" isn't the same as "confirmed undefined".
 function isKnownVariable(name: string, variableGroups?: VariableGroup[]): boolean {
   if (!variableGroups) return true;
   return variableGroups.some((g) => g.names.includes(name));
 }
 
-// Highlights {{variable}} references (anywhere) and, when `pathParams` is
-// true, Postman-style :paramName path segments — scoped to the part of the
-// URL before the first "?", so a stray ":" inside a query value (or a port
-// number like "localhost:8087") never gets mistaken for a path param. When
-// `variableGroups` is supplied, a `{{variable}}` that doesn't resolve in
-// ANY scope (Global or any environment) renders flagged — visible at a
-// glance, no hover needed.
+// Highlights {{variable}} refs and, when pathParams is true, :paramName
+// path segments. Path params are scoped to before the first "?" so a stray
+// ":" in a query value or port number (localhost:8087) isn't mistaken for
+// one. Unresolved variables get flagged styling when variableGroups is
+// passed.
 export function highlightUrlTokens(text: string, pathParams: boolean, variableGroups?: VariableGroup[]): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   const qIndex = text.indexOf("?");
@@ -31,11 +28,9 @@ export function highlightUrlTokens(text: string, pathParams: boolean, variableGr
     if (isPathParam && (!pathParams || match.index >= pathEnd)) continue;
     if (match.index > last) parts.push(text.slice(last, match.index));
     let className = isPathParam ? "text-sky-400" : "text-orange-400";
-    // data-var carries the variable name for the hover/click layer
-    // (useVariableHover.ts) to read back — this span sits under a
-    // pointer-events-none overlay (see UrlInput/ValueInput), so it can
-    // never receive real hover/click events itself; the name is looked up
-    // geometrically via caretRangeFromPoint instead.
+    // This span sits under a pointer-events-none overlay so it never gets
+    // real hover/click events. data-var lets the hover layer read the name
+    // back after looking it up geometrically instead.
     let dataVar: string | undefined;
     if (!isPathParam) {
       const name = match[0].slice(2, -2).trim();

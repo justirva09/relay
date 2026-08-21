@@ -21,9 +21,7 @@ export function isOpenApiSpec(data: any): boolean {
   return typeof data?.openapi === "string" && data.openapi.startsWith("3.");
 }
 
-// Postman/Relay files are JSON; OpenAPI specs are often YAML. Valid JSON is
-// valid YAML, so trying JSON first (exact + fast) then falling back to a
-// YAML parse covers both without needing to sniff the file extension.
+// OpenAPI specs are often YAML, valid JSON is valid YAML too, so try JSON first then fall back
 export function parseCollectionFile(raw: string): any {
   try {
     return JSON.parse(raw);

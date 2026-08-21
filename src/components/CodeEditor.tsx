@@ -36,14 +36,12 @@ const LINE_HEIGHT_PX = 20; // text-[12.5px] * leading-[1.6]
 const AUTO_PAIRS: Record<string, string> = { "{": "}", "[": "]", "(": ")", '"': '"', "'": "'", "`": "`" };
 const CLOSERS = new Set(Object.values(AUTO_PAIRS));
 
-// True when `opener` is a real pair-opening char (not undefined, e.g. at the
-// document's start/end) whose closer is exactly `closer`.
+// true if opener is a real pairing char whose closer matches closer
 function isPairAt(opener: string | undefined, closer: string | undefined): boolean {
   return opener !== undefined && Object.prototype.hasOwnProperty.call(AUTO_PAIRS, opener) && AUTO_PAIRS[opener] === closer;
 }
 
-// Extracts the dot-chain ending at `pos` (e.g. "pm.re" or "to.be.a"), splits
-// it into the path already typed and the partial word being completed.
+// grabs the dot chain ending at pos (e.g. "pm.re"), splits into typed path + partial word
 function chainAt(value: string, pos: number): { path: string[]; partial: string; replaceFrom: number } | null {
   const before = value.slice(0, pos);
   const match = /[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.?$/.exec(before);
@@ -74,8 +72,7 @@ function resolvePmCompletions(path: string[], partial: string, pmRoot: Completio
   return siblings.filter((c) => c.label.startsWith(partial));
 }
 
-// An unclosed "{{partial" ending at `pos` — i.e. a variable reference the
-// user is in the middle of typing (no "}}" yet after the last "{{").
+// matches an unclosed "{{partial" right before pos, mid-typing a variable ref
 function unclosedVarAt(value: string, pos: number): { partial: string; replaceFrom: number } | null {
   const before = value.slice(0, pos);
   const match = /\{\{\s*([\w.-]*)$/.exec(before);
@@ -83,8 +80,7 @@ function unclosedVarAt(value: string, pos: number): { partial: string; replaceFr
   return { partial: match[1], replaceFrom: pos - match[1].length };
 }
 
-// An unclosed JSON key string being typed right after "{" or "," — e.g. `{"na`
-// or `, "na`. Doesn't fire once the closing quote exists.
+// matches an unclosed JSON key string right after "{" or ",", e.g. `{"na`. stops once the closing quote exists
 function unclosedJsonKeyAt(value: string, pos: number): { partial: string; replaceFrom: number; keyStart: number } | null {
   const before = value.slice(0, pos);
   const match = /[{,]\s*"(\w*)$/.exec(before);
@@ -92,12 +88,9 @@ function unclosedJsonKeyAt(value: string, pos: number): { partial: string; repla
   return { partial: match[1], replaceFrom: pos - match[1].length, keyStart: match.index };
 }
 
-// Walks `value` up to `boundary` tracking brace/bracket nesting, giving both
-// the chain of field names containing the cursor (e.g. ["tree", "children"])
-// and the keys already used in that same, still-open object — so a field
-// already filled in above isn't suggested again. Best-effort: ignores content
-// once it hits truly malformed JSON rather than throwing, since the document
-// is usually mid-edit.
+// walks value up to boundary tracking brace/bracket nesting. returns the field chain
+// containing the cursor plus keys already used in that object (so an already-filled
+// field isn't suggested again). bails on malformed JSON instead of throwing, docs are usually mid-edit
 function jsonContextAt(value: string, boundary: number): { path: string[]; siblingKeys: Set<string> } {
   const pathStack: string[] = [];
   const keysStack: Set<string>[] = [new Set()];
@@ -113,7 +106,7 @@ function jsonContextAt(value: string, boundary: number): { path: string[]; sibli
         str += value[j];
         j++;
       }
-      if (value[j] !== '"') break; // unterminated string at the boundary — stop
+      if (value[j] !== '"') break; // unterminated string at boundary, stop
       let k = j + 1;
       while (k < boundary && /\s/.test(value[k])) k++;
       if (value[k] === ":") {
@@ -167,18 +160,16 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
   const gutterRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
 
-  // Once we start manually rewriting `value` for auto-pairing/auto-indent
-  // (preventDefault + a programmatic value change), the browser's native
-  // undo stack for the textarea no longer tracks those edits reliably — so
-  // undo/redo is reimplemented here instead of relying on it.
+  // once we rewrite value ourselves for auto-pair/auto-indent (preventDefault + programmatic
+  // change), the textarea's native undo stops tracking it reliably, so undo/redo is
+  // reimplemented here instead of relying on the browser
   const historyRef = useRef<HistoryEntry[]>([{ value, start: value.length, end: value.length }]);
   const historyIndexRef = useRef(0);
   const lastEditAtRef = useRef(0);
   const isInternalChangeRef = useRef(false);
 
-  // `value` changing without us having triggered it (switching tabs, a
-  // Prettify button, an auto-filled template, …) starts a fresh undo baseline
-  // instead of being folded into whatever history already existed.
+  // if value changes without us causing it (switching tabs, Prettify button, template fill),
+  // start a fresh undo baseline instead of folding into existing history
   useEffect(() => {
     if (isInternalChangeRef.current) {
       isInternalChangeRef.current = false;
@@ -263,9 +254,8 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
     [completions, variables, protoFields, buildMenu]
   );
 
-  // Records + applies an edit in one step, coalescing consecutive plain typing
-  // into a single undo step (like a real editor) while structural edits
-  // (brackets, Enter, completions, …) each get their own step.
+  // records + applies an edit in one step. coalesces consecutive typing into one undo
+  // step like a real editor, but structural edits (brackets, Enter, completions) each get their own
   const commitEdit = useCallback(
     (next: string, start: number, end: number, opts: { coalesce: boolean }) => {
       const now = Date.now();
@@ -330,10 +320,8 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
           : menu.kind === "proto"
           ? `${item.label}": `
           : item.label + (item.isMethod ? "()" : "");
-      // Completing a JSON key: the key's own auto-inserted closing quote is
-      // still sitting right after the cursor — consume it too, since our
-      // insertText already supplies the closing `"` (otherwise it's left
-      // behind as a stray `"` right after the value position).
+      // completing a JSON key: the auto-inserted closing quote is still sitting right after
+      // the cursor, eat it too since insertText already supplies its own closing quote
       if (menu.kind === "proto" && value[replaceTo] === '"') replaceTo += 1;
       const next = value.slice(0, menu.replaceFrom) + insertText + value.slice(replaceTo);
       const cursor =
@@ -406,8 +394,8 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
       }
 
       if (!e.metaKey && !e.ctrlKey && !e.altKey) {
-        // Typing a closer that's already right there just steps over it,
-        // instead of inserting a duplicate — e.g. `{|}` + `}` → `{}|`.
+        // typing a closer that's already right there just steps over it instead of
+        // inserting a duplicate, e.g. `{|}` + `}` becomes `{}|`
         if (start === end && CLOSERS.has(e.key) && val[start] === e.key) {
           e.preventDefault();
           requestAnimationFrame(() => {
@@ -428,7 +416,7 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
           return;
         }
 
-        // Backspacing right inside an empty auto-inserted pair removes both at once.
+        // backspacing inside an empty auto-inserted pair removes both at once
         if (e.key === "Backspace" && start === end && start > 0 && isPairAt(val[start - 1], val[start])) {
           e.preventDefault();
           commitEdit(val.slice(0, start - 1) + val.slice(start + 1), start - 1, start - 1, { coalesce: false });
@@ -440,8 +428,7 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
           const lineStart = val.lastIndexOf("\n", start - 1) + 1;
           const indent = /^[ \t]*/.exec(val.slice(lineStart, start))![0];
           if (isPairAt(val[start - 1], val[start])) {
-            // Enter between a fresh, empty pair expands to three lines with the
-            // closer re-aligned under the opener — e.g. `{|}` → `{\n  |\n}`.
+            // enter inside a fresh empty pair expands to three lines, closer re-aligned under the opener
             const inserted = `\n${indent}  \n${indent}`;
             const cursor = start + indent.length + 3;
             commitEdit(val.slice(0, start) + inserted + val.slice(end), cursor, cursor, { coalesce: false });
@@ -457,10 +444,9 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
 
   const handleKeyUp = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // ArrowUp/Down are consumed by menu navigation in handleKeyDown (which
-      // calls preventDefault, so the caret never actually moves) — recomputing
-      // here too would reset activeIndex back to 0 on every press, making the
-      // menu look stuck. Only recompute for keys that genuinely move the caret.
+      // ArrowUp/Down get consumed by menu navigation in handleKeyDown (preventDefault, so
+      // the caret never moves). recomputing here too would reset activeIndex to 0 every
+      // press and make the menu look stuck, so only recompute for keys that actually move the caret
       if (menu && (e.key === "ArrowUp" || e.key === "ArrowDown")) return;
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
         const ta = e.currentTarget;

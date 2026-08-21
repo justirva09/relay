@@ -13,10 +13,8 @@ const scriptRequire = (name: string) => {
   throw new Error(`Module "${name}" is not available. Built-in: ${Object.keys(libs).join(", ")}`);
 };
 
-// Runs this request's testScript against a saved example's status/body
-// instead of a live network response — "Run all tests" in ExamplesTab uses
-// this to check every scenario's assertions at once without touching the
-// network or the mock server at all.
+// Runs testScript against a saved example instead of a live response, so
+// "Run all tests" can check every example without hitting the network.
 export async function runTestScriptAgainstExample(testScript: string, variables: KVRow[], example: Example, safeMode: boolean): Promise<TestResultDraft[]> {
   if (!testScript.trim()) return [];
   const varsObj: Record<string, string> = {};
@@ -47,10 +45,9 @@ export async function runTestScriptAgainstExample(testScript: string, variables:
   return testResults;
 }
 
-// Global variables with the active environment's variables layered on top
-// (same precedence store.tsx's sendTab/applyVariableChanges use) — exposed
-// here so callers that need the resolved pool without going through a tab's
-// send (e.g. the mock-vs-real contract check) don't duplicate the merge.
+// Global vars with the active environment layered on top, same precedence
+// as a normal send. Used by callers (contract check) that need the resolved
+// pool without going through an actual send.
 export function mergedVariables(workspace: Workspace): KVRow[] {
   const activeEnv = workspace.environments.find((e) => e.id === workspace.activeEnvironmentId);
   const merged = [...workspace.variables];
@@ -65,10 +62,8 @@ export function mergedVariables(workspace: Workspace): KVRow[] {
   return merged;
 }
 
-// Rewrites only the scheme+host+port of an already-fully-resolved URL,
-// keeping path/query untouched — used to send the exact same request to the
-// mock server instead of the environment's real base_url, without editing
-// any variable or environment (see the contract-check feature).
+// Swaps scheme+host+port only, keeps path/query. Lets contract-check hit the
+// mock server with the exact same request instead of the real base_url.
 function withOverrideOrigin(url: string, origin: string): string {
   try {
     const u = new URL(url);
@@ -81,15 +76,11 @@ function withOverrideOrigin(url: string, origin: string): string {
   }
 }
 
-// The Auth tab is the source of truth for the Authorization header when set
-// (see RequestPanel.tsx, which disables manually editing that header row) —
-// computed here and swapped in over whatever's in the raw headers list.
+// Auth tab wins over anything in the raw headers list when set.
 function computeAuthHeader(auth: AuthConfig, varsObj: Record<string, string>): [string, string] | null {
   if (auth.type === "bearer") {
     const token = (substituteVars(auth.bearer?.token ?? "", varsObj) ?? "").trim();
-    // Tolerate a variable that already holds the full "Bearer <token>" string
-    // (common when migrating off a manually-set Authorization header/variable
-    // from before this tab existed) instead of double-prefixing it.
+    // don't double-prefix if the variable already holds "Bearer <token>"
     const value = /^bearer\s+/i.test(token) ? token : `Bearer ${token}`;
     return ["Authorization", value];
   }
@@ -102,26 +93,20 @@ function computeAuthHeader(auth: AuthConfig, varsObj: Record<string, string>): [
     const token = auth.oauth2?.accessToken?.trim();
     return token ? ["Authorization", `Bearer ${token}`] : null;
   }
-  // awsSigV4 is handled separately (see signAwsSigV4 below) — it needs the
-  // fully-resolved method/url/headers/body, not just variable substitution,
-  // and produces more than one header.
+  // awsSigV4 needs the fully resolved request, handled separately below.
   return null;
 }
 
 export interface RunRequestOptions {
-  // Rewrites only the scheme+host+port of the resolved URL — see
-  // withOverrideOrigin (used by the mock-vs-real contract check).
+  // see withOverrideOrigin
   overrideOrigin?: string;
-  // Local trust decision (see store.tsx's safeModeKey) — when true, pre/test
-  // scripts run inside scriptSandbox.ts's isolated iframe instead of this
-  // page's own JS context, so a script from an imported collection can't
-  // reach window.__TAURI_INTERNALS__ (filesystem, git, mock server, ...).
+  // when true, pre/test scripts run in scriptSandbox's isolated iframe
+  // instead of this page's JS context, so an imported script can't reach
+  // window.__TAURI_INTERNALS__.
   safeMode?: boolean;
-  // The local cookie jar (see store.tsx/lib/cookies.ts) — omitted entirely
-  // for mock-vs-real contract-check runs, which don't want cookies leaking
-  // between the two calls. When provided, matching cookies are sent as a
-  // Cookie header (unless the request already sets one manually) and any
-  // Set-Cookie response headers are merged back in via onCookiesChange.
+  // omit for contract-check runs so cookies don't leak between the two
+  // calls. Matching cookies get sent as a Cookie header (unless the request
+  // already sets one), and Set-Cookie responses merge back via onCookiesChange.
   cookies?: StoredCookie[];
   onCookiesChange?: (updated: StoredCookie[]) => void;
 }
@@ -141,10 +126,7 @@ export async function runRequest(
   variables.forEach((r) => {
     if (r.key.trim()) varsObj[r.key] = r.value;
   });
-  // Snapshot before pre/test scripts run — only keys a script actually
-  // changed (via pm.variables.set/pm.environment.set) get written back,
-  // instead of re-persisting the whole merged global+environment pool on
-  // every send regardless of whether anything changed.
+  // snapshot so we only write back keys a script actually changed
   const initialVarsObj: Record<string, string> = { ...varsObj };
 
   const scriptRequest = {
@@ -219,19 +201,15 @@ export async function runRequest(
   const isBodylessMethod = ["GET", "HEAD"].includes(scriptRequest.method);
   const sentBody = isBodylessMethod ? undefined : subBody ?? (formData ? JSON.stringify(formData, null, 2) : undefined);
 
-  // Only auto-fills the Cookie header when the request doesn't already set
-  // one manually — an explicit Headers-tab entry always wins, same
-  // precedence Postman/Bruno use.
+  // manual Headers-tab entry always wins, same as Postman/Bruno
   if (opts.cookies && !subHeaders.some(([k]) => k.toLowerCase() === "cookie")) {
     const matching = matchCookiesForUrl(opts.cookies, subUrl);
     if (matching.length) subHeaders.push(["Cookie", buildCookieHeaderValue(matching)]);
   }
 
-  // Needs the fully-resolved method/url/headers/body to compute the
-  // canonical request, so it runs after every other header/body decision
-  // above instead of alongside computeAuthHeader. Doesn't cover form-data —
-  // the exact multipart bytes aren't known until Rust's reqwest builds
-  // them, so a signed request with a multipart body will fail upstream.
+  // runs last since it needs the fully resolved request. doesn't cover
+  // form-data, the multipart bytes aren't known until reqwest builds them,
+  // so a signed request with a multipart body will fail upstream.
   if (req.auth.type === "awsSigV4" && req.auth.awsSigV4) {
     const signed = await signAwsSigV4(scriptRequest.method, subUrl, subHeaders, sentBody, req.auth.awsSigV4);
     subHeaders = [...subHeaders.filter(([k]) => !signed.some(([sk]) => sk.toLowerCase() === k.toLowerCase())), ...signed];

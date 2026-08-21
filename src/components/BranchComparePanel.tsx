@@ -137,12 +137,12 @@ function EntryCard({
   expanded: boolean;
   onToggle: () => void;
   workspaceDir: string | null;
-  // Mirrors Rust's include_head condition (working-tree mode only — a
-  // straight branch-vs-branch compare has no "uncommitted" concept at all).
+  // mirrors Rust's include_head condition, working-tree mode only. a straight
+  // branch-vs-branch compare has no "uncommitted" concept
   canTagCommitted: boolean;
 }) {
-  // Lazily fetched only once this card is actually expanded — see
-  // includeHead: false in refreshDiff and git_show_at_ref on the Rust side.
+  // fetched lazily once the card is expanded, see includeHead: false in refreshDiff
+  // and git_show_at_ref on the Rust side
   const [taggedLines, setTaggedLines] = useState<DiffLine[] | null>(null);
 
   useEffect(() => {
@@ -155,7 +155,7 @@ function EntryCard({
         const headReq = normalizeRequestData(JSON.parse(head).request);
         setTaggedLines(tagCommitted(entry.diffLines, entry.beforeReq!, headReq));
       } catch {
-        // HEAD content unreadable/not applicable — leave lines untagged.
+        // HEAD content unreadable/not applicable, leave lines untagged
       }
     });
     return () => {
@@ -264,20 +264,18 @@ export default function BranchComparePanel({ onClose }: { onClose: () => void })
     });
   }, [workspaceDir]);
 
-  // The "compare" side is only ever a committed ref UNLESS it's the branch
-  // you're actually sitting on right now — in that case comparing to the ref
-  // alone would silently ignore whatever you're mid-edit on, so this reads
-  // the working tree instead (staged + unstaged combined), same reasoning as
-  // VSCode's Source Control diff always reflecting what's really on disk.
+  // "compare" is only a committed ref unless it's the branch you're actually on,
+  // in which case comparing to the ref alone would ignore whatever's mid-edit,
+  // so this reads the working tree instead (staged + unstaged combined). same
+  // reasoning as VSCode's Source Control diff always reflecting what's on disk
   const refreshDiff = useCallback(() => {
     if (!workspaceDir || !base || !compare) return;
     setLoading(true);
     setError(null);
     const compareArg = compare === currentBranch ? null : compare;
-    // includeHead: false — the committed-vs-uncommitted tag is fetched
-    // lazily per entry on expand instead (see EntryCard), so opening this
-    // panel doesn't pay one extra `git show HEAD:path` per changed file
-    // upfront regardless of how many files differ.
+    // includeHead: false, the committed-vs-uncommitted tag is fetched lazily
+    // per entry on expand instead (see EntryCard), so this panel doesn't pay
+    // one extra `git show HEAD:path` per changed file just from opening
     gitBranchDiff(workspaceDir, base, compareArg, false)
       .then((entries) => setSummary(buildBranchDiffSummary(entries)))
       .catch((e) => setError(e?.message || String(e)))
@@ -289,10 +287,9 @@ export default function BranchComparePanel({ onClose }: { onClose: () => void })
     refreshDiff();
   }, [initialized, refreshDiff]);
 
-  // Sync without closing/reopening: re-fetch when the window regains focus
-  // (e.g. you committed in a terminal, or switched branches elsewhere) —
-  // same pattern GitPanel's own status refresh already uses — plus a manual
-  // button for a same-window commit (no focus change happens for that).
+  // re-fetch when the window regains focus (e.g. committed in a terminal, switched
+  // branches elsewhere), same pattern GitPanel's status refresh uses. plus a manual
+  // button for a same-window commit since that doesn't trigger a focus change
   useEffect(() => {
     const onFocus = () => refreshDiff();
     window.addEventListener("focus", onFocus);

@@ -9,16 +9,14 @@ export interface DiffLine {
   before?: string;
   after?: string;
   sensitive?: boolean;
-  // true = already on HEAD (committed), false = only in the working tree
-  // (uncommitted) on top of HEAD. Undefined when the distinction doesn't
-  // apply (branch-vs-branch mode, or added/removed entries).
+  // true = already on HEAD, false = only in the working tree. Undefined when
+  // it doesn't apply (branch-vs-branch, or added/removed entries).
   committed?: boolean;
 }
 
-// RequestData.url embeds the query string, so comparing the raw url string
-// double-counts every query-param edit as a "URL changed" breaking issue too
-// (see apiStage.ts's splitUrl, same reasoning) — only the base path actually
-// identifies the endpoint; query changes are already covered by diffRows.
+// url includes the query string, so comparing full urls double-counts every
+// query param edit as a "URL changed" issue too. Only the base path
+// identifies the endpoint; query changes are covered by diffRows.
 function urlBase(url: string): string {
   const qIndex = url.indexOf("?");
   return qIndex === -1 ? url : url.slice(0, qIndex);
@@ -30,10 +28,8 @@ function authSummary(auth: AuthConfig): string {
   return "No Auth";
 }
 
-// A newly-added query param or header whose key name looks like a credential
-// — flagged so the UI can call out "this puts a secret where it can leak"
-// (query strings land in logs/browser history/proxies far more often than
-// headers do), not a hard rule, just a naming-convention heuristic.
+// Just a naming heuristic, not a hard rule. Query strings leak into logs,
+// browser history, and proxies way more than headers do.
 const SENSITIVE_KEY = /token|secret|password|api[_-]?key|auth/i;
 
 function diffRows(before: KVRow[], after: KVRow[], label: string, category: DiffCategory): DiffLine[] {
@@ -53,10 +49,8 @@ function diffRows(before: KVRow[], after: KVRow[], label: string, category: Diff
   return lines;
 }
 
-// Diffs two versions of the same HTTP request's data, producing a short list
-// of human-readable "what changed in the API surface" lines instead of a raw
-// JSON text diff — the whole point of a request being structured data rather
-// than an opaque blob.
+// Diffs two request versions into human-readable lines instead of a raw
+// JSON diff.
 export function diffRequestData(before: RequestData, after: RequestData): DiffLine[] {
   const lines: DiffLine[] = [];
 
@@ -96,8 +90,8 @@ export interface HistoryTimelineEntry {
   diffLines: DiffLine[] | null; // null = the commit that created this request
 }
 
-// git log returns newest-first; each commit's diff is against the version it
-// replaced (the next-older entry), so the oldest entry (creation) has none.
+// git log is newest-first; each commit diffs against the version it
+// replaced, so the oldest entry (creation) has none.
 export function buildHistoryTimeline(entries: { hash: string; author: string; date: string; message: string; content: string | null }[]): HistoryTimelineEntry[] {
   return entries.map((entry, i) => {
     const older = entries[i + 1];
@@ -126,40 +120,30 @@ export interface BranchRequestDiff {
   diffLines: DiffLine[];
   breaking: boolean;
   breakingReasons: string[];
-  // The after-state for added/modified, the before-state for removed — lets
-  // the UI show "what this endpoint actually looks like" for an add/remove
-  // (no diff to show, there's only ever one side).
+  // After-state for added/modified, before-state for removed. Only one
+  // side exists then, so there's nothing to diff.
   snapshot: RequestData | null;
-  // gRPC's request shape (service/method/messageJson/metadata) has none of
-  // the HTTP fields this diff engine is built around (.auth, .headers,
-  // .bodyMode) — a gRPC entry gets a whole-file treatment (no field-level
-  // diff, no breaking classification beyond "it was deleted") instead of
-  // being run through HTTP-shaped logic that would crash on it.
+  // gRPC requests don't have the HTTP fields this diff engine assumes
+  // (auth, headers, bodyMode), so they get whole-file treatment instead of
+  // running through HTTP-shaped logic that would crash on them.
   kind: "http" | "grpc";
-  // Both sides, kept around (modified entries only) so the UI can lazily
-  // fetch HEAD's content on expand and compute committed-vs-uncommitted
-  // tags on demand (see tagCommitted/BranchComparePanel) — the bulk fetch
-  // itself skips HEAD entirely (includeHead: false) to stay fast regardless
-  // of how many files changed.
+  // Kept for modified entries so the UI can lazily fetch HEAD on expand and
+  // tag committed vs uncommitted. Bulk fetch skips HEAD to stay fast.
   beforeReq: RequestData | null;
   afterReq: RequestData | null;
 }
 
-// The path is relative to the workspace root (with the storage-layer's
-// `.relay/` or folder-nesting prefix, e.g. ".relay/github-api/search.relay")
-// — the containing folder read straight off it is close enough to Relay's
-// own folder tree for a grouping label without needing the Rust side to
-// walk the actual tree structure.
+// Path is relative to workspace root with the storage layer's .relay/
+// prefix, e.g. ".relay/github-api/search.relay". Good enough for a grouping
+// label without asking Rust to walk the real tree.
 function folderOf(path: string): string {
   const segments = path.split("/").filter((s) => s && s !== ".relay");
   segments.pop();
   return segments.join("/") || "—";
 }
 
-// Collects EVERY applicable reason as its own distinct entry (a request can
-// change method AND url AND leak a secret all at once) instead of only the
-// first match found, or squashing them into one run-on sentence that reads
-// as a single issue even when two unrelated things are actually wrong.
+// Collects every reason that applies, since a request can change method AND
+// url AND leak a secret all at once, instead of stopping at the first match.
 function describeBreaking(status: BranchRequestDiff["status"], before: RequestData | null, after: RequestData | null, diffLines: DiffLine[]): string[] {
   const reasons: string[] = [];
   if (status === "removed") {
@@ -180,10 +164,8 @@ function describeBreaking(status: BranchRequestDiff["status"], before: RequestDa
   return reasons;
 }
 
-// Tags each line of a base-vs-working-tree diff as already-committed (also
-// present in base-vs-HEAD) or uncommitted (only appears once HEAD is
-// compared against the working tree) — matched by exact kind+category+text
-// since DiffLine carries no stable identity beyond its rendered content.
+// Marks each diff line as committed (also present in base-vs-HEAD) or not.
+// Matched by kind+category+text since DiffLine has no stable id.
 export function tagCommitted(diffLines: DiffLine[], beforeReq: RequestData, headReq: RequestData): DiffLine[] {
   const committedLines = diffRequestData(beforeReq, headReq);
   const isCommitted = (l: DiffLine) => committedLines.some((c) => c.kind === l.kind && c.category === l.category && c.text === l.text);
@@ -198,13 +180,10 @@ export interface BranchDiffSummary {
   safe: BranchRequestDiff[];
 }
 
-// Best-effort "is this breaking" call — Relay has no response-schema history
-// (see the History-tab session note: response shapes aren't versioned), so
-// this only flags what the request DEFINITION itself proves: the endpoint
-// disappearing, its method/URL changing (old callers 404 or hit the wrong
-// verb), or auth being newly required where it wasn't before (old callers
-// without credentials start failing). Removing auth, or any query/header/body
-// change, is treated as safe since it can't newly break an existing caller.
+// Best-effort breaking check. Relay doesn't version response shapes, so this
+// only looks at the request definition itself: the endpoint disappearing,
+// method/URL changing, or auth newly required. Everything else (removing
+// auth, query/header/body changes) is treated as safe.
 function isBreaking(status: BranchRequestDiff["status"], before: RequestData | null, after: RequestData | null): boolean {
   if (status === "removed") return true;
   if (status === "added") return false;
@@ -215,8 +194,8 @@ function isBreaking(status: BranchRequestDiff["status"], before: RequestData | n
   return false;
 }
 
-// Parses each side's raw file content (or null for add/remove) and builds
-// the per-request diff + a breaking/safe split for the whole branch compare.
+// Parses each side's raw content (null for add/remove) and builds the
+// breaking/safe split for the whole branch compare.
 export function buildBranchDiffSummary(
   entries: { path: string; status: "added" | "removed" | "modified"; before: string | null; after: string | null; head?: string | null }[]
 ): BranchDiffSummary {
@@ -270,10 +249,9 @@ export function buildBranchDiffSummary(
       continue;
     }
 
-    // Old commits can predate fields added to RequestData later (auth,
-    // examples, pathParams, ...) — normalize so a request from before the
-    // Auth tab existed doesn't crash SnapshotView/diffRequestData on a
-    // field that simply isn't in that historical snapshot.
+    // Old commits can predate fields added later (auth, examples,
+    // pathParams). Normalize so an old request doesn't crash on a field
+    // that just isn't there yet.
     const beforeReq: RequestData | null = beforeParsed?.request ? normalizeRequestData(beforeParsed.request) : null;
     const afterReq: RequestData | null = afterParsed?.request ? normalizeRequestData(afterParsed.request) : null;
 
@@ -283,7 +261,7 @@ export function buildBranchDiffSummary(
         const headReq: RequestData = normalizeRequestData(JSON.parse(entry.head).request);
         diffLines = tagCommitted(diffLines, beforeReq, headReq);
       } catch {
-        // HEAD content unreadable/not applicable — leave lines untagged.
+        // HEAD unreadable, leave lines untagged.
       }
     }
     const isEntryBreaking = isBreaking(entry.status, beforeReq, afterReq);

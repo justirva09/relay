@@ -17,19 +17,15 @@ interface Props {
   variables?: VariableGroup[];
   variableInfo?: VariableInfo;
   lockedKeys?: string[];
-  // Autocomplete for the Name column — only meaningful for actual HTTP
-  // headers (Authorization, Content-Type, Relay's own X-Mock-Scenario, ...).
-  // Omitted for query params/urlencoded/gRPC metadata, which stay plain
-  // free-text input.
+  // autocomplete for the Name column, only for real HTTP headers. omitted for
+  // query params/urlencoded/gRPC metadata, which stay plain free text
   keySuggestions?: string[];
 }
 
-// Plain free-text input with a filtered, click-or-Enter-to-pick suggestion
-// list — deliberately simpler than ValueInput's {{variable}} autocomplete
-// above (no cursor-position token matching needed, a header name is the
-// whole field). Portals the dropdown like ValueInput's does, for the same
-// reason: KeyValueEditor's table sits inside an overflow-x-auto wrapper
-// elsewhere, which clips anything positioned via plain absolute/relative.
+// simpler than ValueInput's {{variable}} autocomplete since a header name is
+// the whole field, no cursor-position token matching needed. portals the
+// dropdown for the same reason ValueInput does: this table sits inside an
+// overflow-x-auto wrapper that clips anything positioned absolute/relative
 function KeyNameInput({
   value,
   onChange,

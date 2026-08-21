@@ -1,12 +1,10 @@
 import React from "react";
 
-// Plain Tailwind spacing-scale track/knob (w-9/h-5 track, w-4/h-4 knob,
-// translate-x-0/translate-x-4) — deliberately no arbitrary px math here.
-// Hand-computed arbitrary values on a prior version of this toggle drifted
-// out of sync with the actual rendered track width three separate times
-// (WebKit's -webkit-appearance chrome, flex-shrink squeezing the track,
-// and a plain off-by-2 in the translate distance) before landing on scale
-// values, which sidestep all three failure modes at once.
+// plain Tailwind spacing-scale track/knob, no arbitrary px math on purpose.
+// a prior version used hand-computed px values and drifted out of sync with
+// the rendered track width three times (WebKit's -webkit-appearance chrome,
+// flex-shrink squeezing the track, an off-by-2 in the translate distance).
+// scale values sidestep all three
 export default function ToggleSwitch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
   const track = (
     <button

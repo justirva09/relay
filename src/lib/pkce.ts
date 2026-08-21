@@ -1,7 +1,6 @@
-// Shared PKCE (RFC 7636) helpers — used both by the Auth tab's generic
-// OAuth2 flow (oauth2.ts) and Relay's own "Sign in with GitHub via Supabase"
-// license flow (license.ts), so the verifier/challenge math lives in one
-// place instead of two copies drifting apart.
+// shared PKCE (RFC 7636) helpers, used by both the Auth tab's generic OAuth2
+// flow (oauth2.ts) and the "Sign in with GitHub via Supabase" license flow
+// (license.ts), so the verifier/challenge math lives in one place
 
 export function base64Url(bytes: Uint8Array): string {
   let binary = "";

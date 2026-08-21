@@ -29,9 +29,8 @@ export interface NativeHttpRequest {
   max_redirects?: number;
 }
 
-// Runs the actual network call in Rust (reqwest), so there's no browser CORS
-// restriction and no webview overhead — this is the whole point of going
-// native instead of using fetch() from the frontend.
+// Actual network call happens in Rust (reqwest), not the webview's fetch().
+// No CORS restrictions that way.
 export function sendHttpRequest(payload: NativeHttpRequest): Promise<NativeHttpResponse> {
   return invoke("http_request", { payload });
 }
@@ -42,17 +41,14 @@ export interface OAuthCallbackResult {
   error: string | null;
 }
 
-// Binds a one-shot local listener on 127.0.0.1:<port>/callback and resolves
-// with the first request it receives — the OAuth2 provider's redirect after
-// the user approves in their system browser. Must be awaited (not just
-// fire-and-forget) before opening the browser tab, so there's no race
-// between the redirect arriving and this being ready to catch it.
+// Listens once on 127.0.0.1:<port>/callback for the OAuth2 redirect after
+// the user approves in their system browser. Await this before opening the
+// browser tab or you can miss the redirect.
 export function oauth2AwaitCallback(port: number, timeoutSecs: number): Promise<OAuthCallbackResult> {
   return invoke("oauth2_await_callback", { port, timeoutSecs });
 }
 
-// Local-only, per-workspace-folder cookie jar — see cookie_jar.rs. Never
-// part of the .relay files themselves.
+// Local-only, per-workspace cookie jar. Never part of the .relay files.
 export function loadCookieJar(workspaceDir: string): Promise<string> {
   return invoke("load_cookie_jar", { workspaceDir });
 }
@@ -98,9 +94,8 @@ export function saveWorkspaceDir(dir: string, data: string, hidden: boolean): Pr
   return invoke("save_workspace_dir", { dir, data, hidden });
 }
 
-// Whether the picked folder already has files besides dotfiles — used to
-// decide whether to offer a flat (visible-at-root) layout at all, or force
-// the isolated .relay/ subfolder so an existing project's files aren't at risk.
+// Whether the folder already has non-dotfile content. If so, force the
+// isolated .relay/ subfolder instead of a flat layout.
 export function dirHasOtherFiles(dir: string): Promise<boolean> {
   return invoke("dir_has_other_files", { dir });
 }
@@ -190,23 +185,19 @@ export interface BranchDiffEntry {
   status: "added" | "removed" | "modified";
   before: string | null;
   after: string | null;
-  // HEAD's content, only populated in working-tree mode (compare: null) —
-  // lets the UI split committed-vs-base from uncommitted-on-top-of-HEAD.
+  // Only populated in working-tree mode (compare: null), splits
+  // committed-vs-base from uncommitted-on-top-of-HEAD.
   head: string | null;
 }
 
-// compare: null diffs `base` against the current working tree (staged +
-// unstaged combined) instead of another branch — see git_branch_diff.
-// includeHead: fetches each changed file's HEAD content too (one extra git
-// subprocess per file) for the committed-vs-uncommitted line tagging — pass
-// false for a bulk listing where nothing reads `.head` yet, and fetch it
-// on demand per entry with gitShowAtRef instead (see BranchComparePanel).
+// compare: null diffs `base` against the working tree instead of another
+// branch. includeHead costs one extra git subprocess per file, so pass
+// false for a bulk listing and fetch on demand with gitShowAtRef instead.
 export function gitBranchDiff(dir: string, base: string, compare: string | null, includeHead: boolean): Promise<BranchDiffEntry[]> {
   return invoke("git_branch_diff", { dir, base, compare, includeHead });
 }
 
-// Single-file on-demand fetch — the lazy counterpart to gitBranchDiff's
-// includeHead, so only entries a user actually expands pay for it.
+// Lazy counterpart to includeHead above: only expanded entries pay for it.
 export function gitShowAtRef(dir: string, rev: string, path: string): Promise<string | null> {
   return invoke("git_show_at_ref", { dir, rev, path });
 }
@@ -222,14 +213,13 @@ export function getPerfStats(): Promise<PerfStats | null> {
   return invoke("get_perf_stats");
 }
 
-// Stages exactly these paths (relative to dir) — for partial-field staging,
-// paired with writing a merged file to disk first. See git_add.
+// Stages exactly these paths, for partial-field staging after writing a
+// merged file to disk first.
 export function gitAdd(dir: string, paths: string[]): Promise<void> {
   return invoke("git_add", { dir, paths });
 }
 
-// Commits whatever is currently staged, without an implicit `add -A` first —
-// the counterpart to gitAdd above.
+// Commits whatever's staged, no implicit `add -A`.
 export function gitCommitStaged(dir: string, message: string): Promise<void> {
   return invoke("git_commit_staged", { dir, message });
 }
@@ -243,8 +233,8 @@ export function checkVersionStatus(): Promise<VersionStatus> {
   return invoke("check_version_status");
 }
 
-// Local-only cache of each request's last response, keyed by workspace
-// folder — never part of the committed .relay files (see response_cache.rs).
+// Local-only cache of each request's last response, keyed by workspace.
+// Never part of the committed .relay files.
 export function loadResponseCache(workspaceDir: string): Promise<string> {
   return invoke("load_response_cache", { workspaceDir });
 }
@@ -253,9 +243,8 @@ export function saveResponseCache(workspaceDir: string, data: string): Promise<v
   return invoke("save_response_cache", { workspaceDir, data });
 }
 
-// A local stand-in HTTP server, not the real backend — replies from this
-// workspace's cached example responses so a frontend can develop against an
-// API that isn't running (or isn't done) yet. See mock_server.rs.
+// Serves this workspace's cached example responses, so a frontend can be
+// built against an API that isn't running yet.
 export function startMockServer(workspaceDir: string, port: number): Promise<void> {
   return invoke("start_mock_server", { workspaceDir, port });
 }

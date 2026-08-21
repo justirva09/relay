@@ -13,11 +13,10 @@ export interface DropInfo {
   position: "before" | "after" | "inside";
 }
 
-// Set right before a drag-driven mouseup would otherwise fire a synthetic
-// click on the same element, so TreeItem's onClick can skip acting on it —
-// cleared on the next tick by the same drag handler that set it. Exposed as
-// accessors (not a bare exported `let`) so Sidebar.tsx and TreeItem.tsx can
-// share one instance without a circular import between them.
+// Set right before a drag-driven mouseup would fire a synthetic click on the
+// same element, so onClick can skip it. Cleared next tick by the same drag
+// handler. Exposed as accessors so Sidebar.tsx and TreeItem.tsx can share
+// one instance without a circular import.
 let suppressNextClick = false;
 export function getSuppressNextClick(): boolean {
   return suppressNextClick;

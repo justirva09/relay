@@ -1,9 +1,8 @@
 import { StoredCookie, uid } from "../types";
 
-// Parses one Set-Cookie header value into a StoredCookie, resolving domain/
-// path defaults against the request URL the way browsers do (RFC 6265 §5.2-5.3):
-// no Domain attribute -> host-only cookie scoped to the exact request host;
-// no Path attribute -> the request URL's directory (not the full path).
+// Follows RFC 6265 §5.2-5.3 defaults: no Domain attribute means host-only
+// cookie scoped to the exact request host, no Path means the request URL's
+// directory (not the full path).
 export function parseSetCookieHeader(headerValue: string, requestUrl: string): StoredCookie | null {
   const parts = headerValue.split(";").map((p) => p.trim());
   const [nameValue, ...attrs] = parts;
@@ -79,9 +78,7 @@ function pathMatches(cookiePath: string, urlPath: string): boolean {
   return urlPath.startsWith(withSlash) || urlPath.startsWith(cookiePath);
 }
 
-// Every stored cookie whose domain/path/secure-scheme/expiry lets it be sent
-// on a request to this URL — used both to build the outgoing Cookie header
-// and to preview what would be sent (CookiesModal).
+// Cookies eligible to send on a request to this URL, by domain/path/secure/expiry.
 export function matchCookiesForUrl(cookies: StoredCookie[], url: string): StoredCookie[] {
   let u: URL;
   try {
@@ -102,10 +99,8 @@ export function buildCookieHeaderValue(cookies: StoredCookie[]): string {
   return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
 }
 
-// Upserts each incoming cookie by (domain, path, name) — the same identity
-// browsers use — and drops anything already expired, so a server clearing a
-// cookie via `Max-Age=0` actually removes it from the jar instead of leaving
-// a dead entry behind.
+// Upserts by (domain, path, name), same identity browsers use. Drops expired
+// cookies so a server's `Max-Age=0` actually clears the jar entry.
 export function mergeCookies(existing: StoredCookie[], incoming: StoredCookie[]): StoredCookie[] {
   const key = (c: StoredCookie) => JSON.stringify([c.domain, c.path, c.name]);
   const byKey = new Map(existing.map((c) => [key(c), c]));

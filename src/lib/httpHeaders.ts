@@ -1,8 +1,5 @@
-// Header-name autocomplete list for KeyValueEditor when it's editing actual
-// HTTP headers (not query params, not gRPC metadata — those pass no
-// suggestions at all and keep plain free-text input). X-Mock-Scenario is
-// Relay's own header (see mock_server.rs) — listed first since it won't be
-// muscle memory the way Authorization/Content-Type already are.
+// autocomplete for actual HTTP headers only, not query params/gRPC metadata.
+// X-Mock-Scenario is Relay's own header, listed first since it's not muscle memory yet
 export const COMMON_HTTP_HEADERS: string[] = [
   "X-Mock-Scenario",
   "Authorization",

@@ -5,11 +5,9 @@ import CodeEditor from "../CodeEditor";
 import KeyValueEditor from "../KeyValueEditor";
 import { COMMON_HTTP_HEADERS } from "../../lib/httpHeaders";
 
-// Example.headers is a plain [string, string][] (matching ResponseState —
-// "Save as example" copies a real response's headers straight in), but the
-// editor works in KVRow[] — converted at the boundary rather than changing
-// Example's own shape, which several other places (mock_server.rs, the
-// save-as-example flow) already depend on.
+// Example.headers is a plain tuple array (matches ResponseState), the
+// editor wants KVRow[], so convert at the boundary instead of changing
+// Example's shape.
 function headersToRows(headers: [string, string][]): KVRow[] {
   const rows = headers.map(([key, value]) => ({ ...newRow(), key, value }));
   return rows.length ? rows : [newRow()];
@@ -25,11 +23,8 @@ function statusColor(status: number): string {
   return "text-emerald-400 bg-emerald-400/10 ring-emerald-400/30";
 }
 
-// Same algorithm as Rust's slugify() in mock_server.rs — an example's
-// scenario key defaults to its (slugified) name, but scenarioKey overrides
-// that independently so the display name can stay descriptive while the
-// header value stays short. Either way this keeps the hint in sync with
-// what the server actually accepts in the X-Mock-Scenario header.
+// must match Rust's slugify() in mock_server.rs, scenarioKey can override
+// the default so the display name stays readable while the header stays short
 function slugify(name: string): string {
   return name
     .toLowerCase()
@@ -37,9 +32,8 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-// Saved response snapshots the local mock server serves back for this
-// request (see mock_server.rs) — the default one is served with no header
-// needed; the others are picked via `X-Mock-Scenario: <slug of their name>`.
+// saved response snapshots the mock server serves for this request, default
+// one needs no header, others are picked via X-Mock-Scenario
 interface ExamplesTabProps {
   examples: Example[];
   onChange: (examples: Example[]) => void;
@@ -72,9 +66,7 @@ export default function ExamplesTab({ examples, onChange, testScript, variables,
     setExpandedId(created.id);
   };
 
-  // Runs testScript against every saved example's status/body locally (no
-  // network, no mock server needed) — catches "the 404 scenario doesn't
-  // actually satisfy my assertions" before ever wiring it into the mock.
+  // runs testScript against every saved example locally, no network needed
   const runAllTests = async () => {
     const entries = await Promise.all(
       examples.map(async (ex) => {

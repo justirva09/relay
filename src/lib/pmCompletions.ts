@@ -1,6 +1,5 @@
-// Autocomplete data for the pre-request/test script editors — mirrors the
-// actual pm API surface built in pm.ts, not a guess, so suggestions never
-// drift from what a script can really call.
+// Autocomplete data for the script editors. Mirrors the real pm API in
+// pm.ts so suggestions never drift from what a script can actually call.
 export interface CompletionItem {
   label: string;
   detail: string;
@@ -88,10 +87,9 @@ const EXPECT: CompletionItem = {
 export const PM_PRE_COMPLETIONS: CompletionItem[] = [ENVIRONMENT, VARIABLES, REQUEST];
 export const PM_TEST_COMPLETIONS: CompletionItem[] = [ENVIRONMENT, VARIABLES, RESPONSE, TEST, EXPECT];
 
-// pm.expect(actual).to.equal(...) — the ".to." chain isn't reachable by
-// walking down from "pm" (there's a function call in between), so it's
-// registered as its own completion root, triggered on ".to." wherever it
-// appears rather than requiring a literal "pm." prefix.
+// The ".to." chain in pm.expect(x).to.equal() isn't reachable by walking
+// down from "pm" (there's a function call in between), so it gets its own
+// completion root triggered on ".to." instead of a "pm." prefix.
 export const ASSERTION_ROOT: CompletionItem = {
   label: "to",
   detail: "namespace",

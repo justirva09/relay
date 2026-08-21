@@ -37,8 +37,8 @@ export function useImportExport(workspace: Workspace, setWorkspace: Dispatch<Set
     }
   }, [parseImportSource]);
 
-  // Same file picker + parse, but new (unmatched) requests land inside this
-  // specific folder instead of mirroring the incoming spec's own grouping.
+  // same as above, but new requests land in this folder instead of mirroring
+  // the incoming spec's own grouping
   const importIntoFolder = useCallback(
     async (folderId: string) => {
       try {
@@ -54,9 +54,8 @@ export function useImportExport(workspace: Workspace, setWorkspace: Dispatch<Set
   const cancelImport = useCallback(() => setPendingImport(null), []);
   const dismissImportError = useCallback(() => setImportError(null), []);
 
-  // Merges only the requests the user checked in the picker into the
-  // existing workspace tree (matched by method+URL, see mergeImport.ts) —
-  // re-importing the same spec updates in place instead of duplicating.
+  // merges only the checked requests, matched by method+URL, so re-importing
+  // the same spec updates in place instead of duplicating
   const confirmImport = useCallback(
     (selectedIds: Set<string>): { added: number; updated: number } => {
       if (!pendingImport) return { added: 0, updated: 0 };

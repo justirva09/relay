@@ -12,9 +12,8 @@ fn workspace_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir.join("workspace.json"))
 }
 
-/// Legacy single-file workspace store (pre-.relay). Kept only so the
-/// frontend can read a user's pre-upgrade data once to migrate it into a
-/// folder they choose; not used for ongoing storage anymore.
+/// Legacy single-file store from before .relay folders. Kept so the
+/// frontend can migrate old data once; not used for ongoing storage.
 #[tauri::command]
 pub fn load_workspace(app: AppHandle) -> Result<String, String> {
     let path = workspace_path(&app)?;
@@ -66,10 +65,8 @@ fn walk_proto_files(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec
     Ok(())
 }
 
-/// Recursively reads every `.proto` file under the given root directory, keyed by
-/// its path relative to that root — matching `import "pkg/sub/file.proto";`
-/// statements exactly, the same way `protoc -I <root>` resolves imports, instead
-/// of requiring the user to hunt down and attach each dependency by hand.
+/// Recursively reads every .proto file under root, keyed by its relative
+/// path, matching import statements the same way `protoc -I` resolves them.
 #[tauri::command]
 pub fn list_proto_files_in_dir(dir: String) -> Result<Vec<ProtoFileInput>, String> {
     let root = std::path::Path::new(&dir);
@@ -78,17 +75,10 @@ pub fn list_proto_files_in_dir(dir: String) -> Result<Vec<ProtoFileInput>, Strin
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
-// Git-native plain-text workspace storage (.relay)
-//
-// A workspace is a directory of small deterministic JSON files, one per
-// request/folder/environment, instead of a single workspace.json blob. Every
-// save rewrites the whole tree from the in-memory Workspace object; because
-// each file's content is fully determined by that node's own data (serde_json
-// serializes object keys in sorted order) and slugs are stable across saves,
-// untouched nodes come out byte-identical and git only ever shows the nodes
-// that actually changed.
-// ---------------------------------------------------------------------------
+// Git-native workspace storage (.relay): one deterministic JSON file per
+// request/folder/environment instead of one big blob. Stable slugs and
+// sorted keys keep untouched nodes byte-identical across saves, so git
+// diffs only show what actually changed.
 
 fn slugify(name: &str) -> String {
     let mut out = String::new();
@@ -137,8 +127,7 @@ fn node_name(node: &Value) -> String {
     node.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string()
 }
 
-/// Writes `nodes` (a TreeNode[]) as children of `dir`, returning the ordered
-/// list of "kind:slug" references a parent uses to reconstruct child order.
+/// Writes nodes as children of dir, returning ordered "kind:slug" refs used to reconstruct order.
 fn write_tree_nodes(dir: &Path, nodes: &[Value], reserved_dirs: &[&str], reserved_files: &[&str]) -> Result<Vec<String>, String> {
     let mut used_dirs: HashMap<String, String> = HashMap::new();
     let mut used_files: HashMap<String, String> = HashMap::new();
@@ -254,11 +243,8 @@ fn clean_workspace_dir(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether an existing workspace at `dir` is stored flat (files directly in
-/// `dir`) or under a hidden `.relay/` subfolder — detected from whichever
-/// `workspace.relay` actually exists on disk, so a folder someone else set
-/// up (e.g. cloned from git) is read back the same way regardless of which
-/// mode this particular Relay install would otherwise default to.
+/// Detects whether a workspace at dir is flat or hidden (.relay/), based on
+/// which workspace.relay exists on disk. Matches whatever a cloned folder was already using.
 fn detect_layout(dir: &str) -> Option<bool> {
     if Path::new(dir).join(".relay").join("workspace.relay").exists() {
         Some(true)
@@ -269,10 +255,9 @@ fn detect_layout(dir: &str) -> Option<bool> {
     }
 }
 
-/// True if `dir` has any entry besides dotfiles/`.relay` — i.e. whether it's
-/// an existing project folder rather than one dedicated to this workspace.
-/// Used so the frontend can force the safer hidden layout instead of letting
-/// flat mode wipe someone's other files.
+/// True if dir has anything besides dotfiles, meaning it's an existing
+/// project folder. Lets the frontend force hidden layout instead of flat
+/// mode wiping other files.
 #[tauri::command]
 pub fn dir_has_other_files(dir: String) -> Result<bool, String> {
     let path = Path::new(&dir);
@@ -519,13 +504,11 @@ mod tests {
         assert_eq!(loaded["activeEnvironmentId"], "e1");
         assert_eq!(loaded["variables"][0]["key"], "base");
 
-        // Rename the request and re-save: old file should be gone, new one present,
-        // and untouched sibling files must be byte-identical (stable git diffs).
+        // Rename and re-save: old file gone, new one present, untouched siblings stay byte-identical.
         let before_grpc = fs::read_to_string(relay.join("github-api").join("sayhello.relay")).unwrap();
         let mut ws2 = loaded.clone();
         ws2["tree"][0]["children"][0]["name"] = json!("Fetch user");
-        // Note: hidden=false here is ignored — layout was already established
-        // as hidden by the first save, and that's auto-detected from disk.
+        // hidden=false here is ignored, layout was already set to hidden by the first save.
         save_workspace_dir(dir.to_string_lossy().to_string(), ws2.to_string(), false).expect("save2 failed");
         assert!(!relay.join("github-api").join("get-user.relay").exists());
         assert!(relay.join("github-api").join("fetch-user.relay").exists());
@@ -562,8 +545,7 @@ mod tests {
     #[test]
     fn hidden_mode_never_touches_other_files_in_the_chosen_folder() {
         let dir = tmp_dir("existing-project");
-        // Simulate the exact scenario being fixed: user points Relay at an
-        // existing project folder that already has its own files.
+        // User points Relay at an existing project folder that already has its own files.
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("package.json"), "{\"name\":\"my-app\"}").unwrap();
         fs::create_dir_all(dir.join("src")).unwrap();
@@ -648,9 +630,8 @@ mod tests {
         assert!(!plain_raw.contains("sk-supersecret"), "secret value must not land in the committed file");
         assert!(plain_raw.contains("api.example.com"), "non-secret value stays in the committed file");
 
-        // Lives inside .relay/, not the project root's own .gitignore — git
-        // honors nested .gitignore files, and this way saving a workspace
-        // never touches a file outside .relay/ at all.
+        // Lives inside .relay/, not the project root's .gitignore. Git honors
+        // nested .gitignore files, so saving never touches anything outside .relay/.
         let gitignore = fs::read_to_string(dir.join(".relay").join(".gitignore")).unwrap();
         assert!(gitignore.contains("*.secret.relay"));
 

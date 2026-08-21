@@ -1,13 +1,9 @@
 import React, { useRef, useState } from "react";
 import ReactDOM from "react-dom";
 
-// Small hover-triggered explainer — used wherever a label alone doesn't say
-// enough (Performance cards, Path Variables, ...) instead of the browser's
-// plain native title tooltip, to match the app's own visual language.
-// Portaled straight to <body> at a computed fixed position (same technique
-// as VariableHoverTooltip) rather than position:absolute in place, since
-// callers often sit inside an overflow-y-auto container that would
-// otherwise clip the tooltip regardless of z-index.
+// Custom hover tooltip instead of the browser's native title, to match the
+// app's look. Portaled to <body> at a fixed position since callers often
+// sit inside an overflow-y-auto container that would clip it otherwise.
 export default function InfoTooltip({ text }: { text: string }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const iconRef = useRef<HTMLSpanElement>(null);

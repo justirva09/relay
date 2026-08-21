@@ -7,28 +7,25 @@ export interface RunnerRequestRef {
   id: string;
   name: string;
   method: string;
-  // Breadcrumb of enclosing folder names, e.g. ["Auth", "Login"] — shown in
-  // the picker so two same-named requests in different folders aren't
-  // ambiguous.
+  // breadcrumb of enclosing folder names, e.g. ["Auth", "Login"], shown in the
+  // picker so two same-named requests in different folders aren't ambiguous
   path: string[];
   request: RequestData;
   tags: string[];
 }
 
-// Flattens the workspace tree into just its HTTP requests (gRPC isn't part
-// of the Runner — pm-style test scripts/response assertions are an HTTP
-// concept here) in the same order they appear in the sidebar.
+// flattens the workspace tree into just its HTTP requests (gRPC isn't part of
+// the Runner, pm-style test scripts are an HTTP concept here), same order as the sidebar
 export function flattenRequests(tree: TreeNode[], parentPath: string[] = []): RunnerRequestRef[] {
   const out: RunnerRequestRef[] = [];
   for (const node of tree) {
     if (node.kind === "folder") {
       out.push(...flattenRequests(node.children, [...parentPath, node.name]));
     } else if (node.kind === "request") {
-      // The tab-open flow always normalizes a request before it's usable
-      // (backfills pathParams/tags/settings/etc for older or imported files
-      // saved before those fields existed) — the Runner reads straight from
-      // the tree, so it needs the same normalization or a request missing a
-      // newer field crashes runRequest instead of just running with defaults.
+      // the tab-open flow always normalizes a request first (backfills
+      // pathParams/tags/settings for older or imported files). the Runner reads
+      // straight from the tree, so it needs that too or a missing field crashes
+      // runRequest instead of just falling back to a default
       const request = normalizeRequestData(node.request);
       out.push({ id: node.id, name: node.name, method: request.method, path: parentPath, request, tags: request.tags });
     }
@@ -44,9 +41,8 @@ export function filterByTags(items: RunnerRequestRef[], include: string[], exclu
   });
 }
 
-// Minimal CSV parser — handles quoted fields (so a value can contain a
-// comma) but not multi-line quoted cells, which is plenty for the small,
-// flat key/value data sets a Runner data file realistically holds.
+// minimal CSV parser, handles quoted fields (so a value can contain a comma)
+// but not multi-line quoted cells, plenty for the small flat data sets a Runner data file holds
 export function parseCsv(text: string): Record<string, string>[] {
   const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length === 0) return [];
@@ -113,8 +109,7 @@ export interface RunnerOptions {
   delayMs: number;
   iterations: number;
   parallel: boolean;
-  // Premium (Run with Parameters) — one iteration per row, overriding
-  // `iterations` when present.
+  // Premium (Run with Parameters): one iteration per row, overrides `iterations` when present
   dataRows?: Record<string, string>[];
 }
 
@@ -126,10 +121,9 @@ function resultStatus(response: ResponseState): "passed" | "failed" {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Runs every selected request, `options.iterations` times (or once per
-// `dataRows` row when set), reusing the exact same send pipeline as the
-// request editor's own Send button — auth, scripts, cookies, everything
-// behaves identically to sending it by hand.
+// runs every selected request `options.iterations` times (or once per `dataRows`
+// row when set), reusing the same send pipeline as the editor's Send button.
+// auth, scripts, cookies, all behave identically to sending it by hand
 export async function runCollection(
   items: RunnerRequestRef[],
   variables: KVRow[],
@@ -147,15 +141,14 @@ export async function runCollection(
     if (isCancelled()) return;
 
     const dataRow = options.dataRows?.[iteration];
-    // A data row's columns act as extra/overriding variables for just this
-    // iteration's requests — never persisted back to the environment.
+    // a data row's columns act as extra/overriding variables for just this
+    // iteration, never persisted back to the environment
     const iterationVars = dataRow ? [...variables, ...Object.entries(dataRow).map(([key, value]) => ({ id: `runner-data-${key}`, key, value, enabled: true }))] : variables;
 
     const runOne = async (item: RunnerRequestRef) => {
-      // A single request throwing (e.g. a malformed saved request, an
-      // unexpected script error) must not take down the whole run — record
-      // it as a failure and keep going, same as a request that comes back
-      // with an HTTP error already does.
+      // one request throwing (malformed saved request, unexpected script error)
+      // shouldn't take down the whole run, record it as a failure and keep going,
+      // same as a request that comes back with an HTTP error already does
       let response: ResponseState;
       try {
         response = await runRequest(item.request, iterationVars, onVariablesChange, { safeMode, cookies, onCookiesChange });
@@ -213,9 +206,8 @@ export interface ReportRow {
 
 const BODY_METHODS = new Set(["POST", "PUT", "PATCH"]);
 
-// Shared by both the JSON and HTML report paths so an assertion/body field
-// added here shows up in both, not just whichever export happened to be
-// touched last.
+// shared by both the JSON and HTML report paths so a field added here shows
+// up in both, not just whichever export got touched last
 export function buildReportData(results: RunnerResult[]): ReportRow[] {
   return results.map((r) => {
     const failed = r.status === "failed";

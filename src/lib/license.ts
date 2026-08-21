@@ -1,13 +1,10 @@
-// Relay Pro licensing — Sign in with GitHub via Supabase Auth (PKCE, same
-// loopback-listener infra as the Auth tab's generic OAuth2 flow), fetch a
-// signed entitlement from the `issue-license` Edge Function, verify it
-// offline with a public key baked into this file, and cache the verified
-// result so feature checks never need a network round trip.
+// Relay Pro licensing. GitHub sign-in via Supabase Auth (PKCE, reuses the
+// loopback listener from the Auth tab's OAuth2 flow), fetch a signed
+// entitlement from the issue-license Edge Function, verify it offline with
+// the public key below, cache it so feature checks don't need a network call.
 //
-// This is intentionally NOT workspace-scoped (see cookie_jar.rs/theme.tsx
-// for the pattern this follows) — one Relay install has one signed-in
-// account regardless of which workspace folder is open, so the session and
-// license cache both live in localStorage, not a per-workspace file.
+// Not workspace-scoped on purpose: one install, one signed-in account, so
+// session and license cache live in localStorage instead of a per-workspace file.
 import { open } from "@tauri-apps/plugin-shell";
 import { oauth2AwaitCallback, sendHttpRequest } from "./tauri";
 import { randomToken, codeChallengeFor } from "./pkce";
@@ -16,9 +13,8 @@ const SUPABASE_URL = "https://qqbzadmyejqpumydulpf.supabase.co";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFxYnphZG15ZWpxcHVteWR1bHBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwODAwNjQsImV4cCI6MjEwMjY1NjA2NH0.I5RXxW8LeOkKYqb65T_cV-oXXYhw6fU6ICdkL5vrkzw";
 
-// Public half of the Ed25519 keypair whose private half only ever lives as
-// a Supabase Edge Function secret (LICENSE_SIGNING_PRIVATE_KEY) — safe to
-// ship in the binary, it can only verify signatures, never create them.
+// Public half of the Ed25519 keypair, private half lives only as a Supabase
+// secret. Safe to ship in the binary, this can only verify signatures.
 const LICENSE_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAVZSaqzV6kzxK1vrPmMwxoVBe5fZZ6uJI4/p2jh0h+xM=
 -----END PUBLIC KEY-----`;
@@ -49,19 +45,16 @@ export interface LicensePayload {
 export interface LicenseState {
   session: LicenseSession | null;
   license: LicensePayload | null;
-  // When the last successful (network + signature) refresh happened — not
-  // the same as license.issued_at, which comes from the server.
+  // last successful refresh, not the same as license.issued_at from the server
   verifiedAt: number | null;
   loading: boolean;
   error: string | null;
 }
 
-// The cache holds the RAW signed blob (base64url payload + signature), not
-// the already-parsed feature list — hasFeature() must never trust a plain
-// JSON object that could've been hand-edited in localStorage. `license` in
-// state only ever gets set after a real crypto.subtle.verify() against
-// these exact bytes, so tampering with the cached strings just makes the
-// signature fail to verify instead of quietly forging extra features.
+// Cache stores the raw signed blob (payload + signature), not the parsed
+// feature list. state.license only gets set after crypto.subtle.verify()
+// passes, so editing the cached strings by hand just breaks the signature
+// instead of forging features.
 interface CachedLicenseBlob {
   payloadB64: string;
   signatureB64: string;
@@ -101,25 +94,19 @@ export function subscribeLicense(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-// Checked entirely against the cached signed license, no network needed —
-// but a cache is only ever trustworthy up to the expiry it was signed with.
-// The server already excludes features for a non-active subscription
-// (see issue-license's effectivePlan), but that's only as fresh as the last
-// refresh; expires_at is a concrete timestamp, so it's checked here too as
-// a client-side backstop against a stale-but-still-cached license outliving
-// the period it was actually valid for.
+// Checked against the cached signed license, no network call. The server
+// already drops features once a subscription lapses, but that's only as
+// fresh as the last refresh, so expires_at gets checked here too as a
+// backstop against a stale cached license.
 export function isLicenseValid(): boolean {
   if (!state.license) return false;
   if (state.license.expires_at && Date.parse(state.license.expires_at) <= Date.now()) return false;
   return true;
 }
 
-// Business decision: everything is free for this initial launch — no
-// feature is Pro-gated yet, regardless of what a license/subscription would
-// otherwise say. The licensing/sign-in infrastructure (this whole file,
-// Settings' Account section, the issue-license backend) stays wired up as-is
-// so gating specific features again later is just deleting this early
-// return — not rebuilding the plumbing from scratch.
+// Everything's free for the initial launch, nothing is Pro-gated yet. The
+// licensing plumbing stays wired up so gating a feature later is just
+// deleting this early return.
 export function hasFeature(_id: string): boolean {
   return true;
 }
@@ -136,10 +123,8 @@ async function importPublicKey(pem: string): Promise<CryptoKey> {
   return crypto.subtle.importKey("spki", der, { name: "Ed25519" }, false, ["verify"]);
 }
 
-// Verifies the Ed25519 signature over the raw payload bytes and returns the
-// parsed payload only if it checks out — never trust an unsigned/mismatched
-// payload, even locally. This is the ONLY path allowed to produce a
-// LicensePayload; nothing else in this module may construct one directly.
+// Only path allowed to produce a LicensePayload. Returns null if the
+// signature doesn't check out, even locally.
 async function verifySignedLicense(payloadB64: string, signatureB64: string): Promise<LicensePayload | null> {
   const key = await importPublicKey(LICENSE_PUBLIC_KEY_PEM);
   const payloadBytes = base64UrlDecode(payloadB64);
@@ -153,11 +138,8 @@ async function verifySignedLicense(payloadB64: string, signatureB64: string): Pr
   }
 }
 
-// Supabase access tokens expire (~1h) — refreshLicense used to send the raw
-// stored accessToken forever, so any session older than that expiry hit
-// issue-license's supabase.auth.getUser() check and got a 401. This exchanges
-// the refresh_token for a new access_token whenever the cached one is
-// expired or about to be, before making the actual issue-license call.
+// Supabase access tokens expire in about an hour. Refresh before that
+// happens instead of sending a stale token and getting a 401 from issue-license.
 async function ensureFreshAccessToken(session: LicenseSession): Promise<LicenseSession> {
   const expiringSoon = !session.expiresAt || session.expiresAt <= Date.now() + 60_000;
   if (!expiringSoon || !session.refreshToken) return session;
@@ -197,11 +179,8 @@ function persistLicenseBlob(blob: CachedLicenseBlob | null) {
   else localStorage.removeItem(LICENSE_KEY);
 }
 
-// Re-verifies whatever raw blob is cached, if any, and only then updates
-// state — called once at module load, so a page/app reload never trusts
-// the cache blindly. If the signature doesn't check out (tampered, or the
-// key ever rotates), this just leaves state.license as null rather than
-// throwing, same as any other "no valid license" case.
+// Re-verifies the cached blob before trusting it, so a reload never trusts
+// localStorage blindly. Bad signature just means no license, not a crash.
 async function rehydrateCachedLicense(): Promise<void> {
   const cached = loadJson<CachedLicenseBlob>(LICENSE_KEY);
   if (!cached) return;
@@ -210,12 +189,10 @@ async function rehydrateCachedLicense(): Promise<void> {
 }
 rehydrateCachedLicense();
 
-// Calls issue-license with the current session's token, verifies the
-// signature, and updates both in-memory state and the local cache. Safe to
-// call opportunistically (e.g. on app start, or a manual "Refresh" button)
-// — failures just leave the last verified license in place rather than
-// clearing it, so a flaky/offline moment doesn't lock a user out of
-// features they already legitimately unlocked.
+// Safe to call opportunistically (app start, manual refresh button).
+// Failures leave the last verified license in place instead of clearing it,
+// so a flaky/offline moment doesn't lock someone out of features they
+// already unlocked.
 export async function refreshLicense(): Promise<void> {
   const session = state.session;
   if (!session) return;
@@ -245,10 +222,9 @@ export async function refreshLicense(): Promise<void> {
   }
 }
 
-// Runs Supabase Auth's PKCE flow for GitHub: opens the system browser to
-// Supabase's own /authorize endpoint (which fronts GitHub's OAuth), catches
-// the redirect locally, exchanges the code for a Supabase session, then
-// immediately fetches and verifies a license for it.
+// Supabase's PKCE flow for GitHub: open the system browser to /authorize
+// (fronting GitHub's OAuth), catch the redirect locally, exchange the code
+// for a session, then fetch a license for it.
 export async function signInWithGitHub(): Promise<void> {
   setState({ loading: true, error: null });
   try {

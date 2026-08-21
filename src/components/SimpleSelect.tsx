@@ -1,10 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import FloatingMenu from "./FloatingMenu";
 
-// Custom-styled select matching the app's existing dropdown convention (see
-// MethodDropdown in RequestPanel.tsx) — a native <select> can't be themed
-// consistently across platforms, and its popup would fall back to the OS
-// widget entirely.
+// native <select> can't be themed consistently across platforms
 export default function SimpleSelect<T extends string>({
   value,
   options,

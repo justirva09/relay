@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-// Portals children into a fixed-position shadow of anchorRef's own box (same
-// top/left/width/height, invisible, pointer-events disabled on the shadow
-// itself) so existing `position: absolute` children (e.g. VariableMenuList's
-// `top: 100%; left: Nch`) keep resolving against that box exactly as before,
-// while escaping any scrollable ancestor that would otherwise clip them
-// regardless of z-index.
+// portals children into a fixed-position shadow of anchorRef's box (same
+// top/left/width/height, invisible, pointer-events disabled), so existing
+// `position: absolute` children (e.g. VariableMenuList's `top: 100%; left: Nch`)
+// keep resolving against that box like before, while escaping any scrollable
+// ancestor that would otherwise clip them regardless of z-index
 export default function AnchorPortal({ anchorRef, children }: { anchorRef: React.RefObject<HTMLElement>; children: React.ReactNode }) {
   const [rect, setRect] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
 

@@ -6,9 +6,8 @@ export interface MergeResult {
   updated: number;
 }
 
-// Path of folder names from root down to (and including) the folder with
-// the given id — used so new, unmatched requests from a targeted "import
-// into this folder" can be rooted there instead of at the tree's root.
+// Path of folder names from root to the given folder, so a targeted
+// "import into this folder" can root new requests there instead of at root.
 export function findFolderPath(tree: TreeNode[], folderId: string, path: string[] = []): string[] | null {
   for (const n of tree) {
     if (n.kind !== "folder") continue;
@@ -77,13 +76,11 @@ function insertByPath(tree: TreeNode[], path: string[], node: TreeNode): TreeNod
   return [...tree.slice(0, idx), updatedFolder, ...tree.slice(idx + 1)];
 }
 
-// Re-importing the same OpenAPI/Postman spec should update existing requests
-// in place (matched by method + URL) rather than appending duplicates.
-// Matches are updated everywhere except preScript/testScript (never
-// overwritten) and their existing name/folder position (never moved/renamed).
-// Unmatched incoming requests are inserted new, mirroring the incoming
-// folder path. Existing requests absent from the incoming spec are left
-// untouched — sync only adds/updates, never deletes.
+// Re-importing the same spec updates existing requests in place (matched by
+// method + URL) instead of appending duplicates. preScript/testScript and
+// name/folder position are never overwritten. Unmatched incoming requests
+// get inserted new. Existing requests missing from the spec are left alone,
+// sync only adds/updates, never deletes.
 export function mergeIncomingTree(existingTree: TreeNode[], incomingTree: TreeNode[], basePath: string[] = []): MergeResult {
   const incomingByKey = new Map<string, RequestNode>();
   indexRequests(incomingTree, incomingByKey);

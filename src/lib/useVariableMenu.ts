@@ -1,8 +1,7 @@
 import { useCallback, useState } from "react";
 
-// A named source of variables — "Global" for workspace-level variables, or
-// an environment's own name ("Local", "Staging", ...) — so the completion
-// list can show which scope each suggestion comes from.
+// named source of variables ("Global", or an environment's name) so the
+// completion list can show which scope a suggestion comes from
 export interface VariableGroup {
   category: string;
   names: string[];
@@ -21,8 +20,7 @@ export interface VarMenu {
   col: number;
 }
 
-// An unclosed "{{partial" ending at `pos` — a variable reference the user
-// is in the middle of typing (no "}}" yet after the last "{{").
+// an unclosed "{{partial" ending at pos, no "}}" yet after the last "{{"
 function unclosedVarAt(value: string, pos: number): { partial: string; replaceFrom: number } | null {
   const before = value.slice(0, pos);
   const match = /\{\{\s*([\w.-]*)$/.exec(before);
@@ -30,9 +28,8 @@ function unclosedVarAt(value: string, pos: number): { partial: string; replaceFr
   return { partial: match[1], replaceFrom: pos - match[1].length };
 }
 
-// Shared {{variable}} completion trigger for single-line inputs (URL,
-// header/param values) — CodeEditor has its own copy of this logic sized
-// for a multi-line textarea, but the trigger itself is the same idea.
+// shared {{variable}} completion for single-line inputs, CodeEditor has its
+// own version of this for the multi-line textarea case
 export function useVariableMenu(groups: VariableGroup[] | undefined) {
   const [menu, setMenu] = useState<VarMenu | null>(null);
 
@@ -73,8 +70,7 @@ export function useVariableMenu(groups: VariableGroup[] | undefined) {
     setMenu((m) => (m ? { ...m, activeIndex: index } : m));
   }, []);
 
-  // Returns the new value + cursor position after inserting `name` — caller
-  // applies it to their own onChange/selection state.
+  // returns new value + cursor pos after inserting, caller applies it to their own state
   const apply = useCallback((currentValue: string, name: string) => {
     if (!menu) return null;
     const insertText = `${name}}}`;

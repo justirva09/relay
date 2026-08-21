@@ -9,9 +9,7 @@ export function collectLeafIds(nodes: TreeNode[]): string[] {
   return ids;
 }
 
-// Prunes a tree down to only the selected leaves (requests/gRPC calls),
-// keeping any ancestor folder that still has at least one selected
-// descendant so the resulting shape stays a valid, non-empty-folder tree.
+// keeps ancestor folders that still have a selected descendant, drops empty ones
 export function filterTreeBySelection(nodes: TreeNode[], selectedLeafIds: Set<string>): TreeNode[] {
   const out: TreeNode[] = [];
   for (const n of nodes) {

@@ -35,19 +35,15 @@ fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
-    // trim_end only — `git status --porcelain`'s fixed-column format uses a
-    // LEADING space to mean "unstaged-only change" (e.g. " M path"); a plain
-    // .trim() would eat that space whenever it's the first character of the
-    // whole output (a single such file with nothing before it), silently
-    // shifting every subsequent fixed-offset substring read by one char and
-    // truncating the path's first character.
+    // trim_end only. `git status --porcelain` uses a leading space to mean
+    // "unstaged-only change" (" M path"). A plain .trim() would eat that
+    // space when it's the first char of the whole output, shifting the
+    // fixed-column offsets and truncating the path.
     Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
 }
 
-/// Mirrors storage::detect_layout — whether this workspace's files live
-/// under a hidden `.relay/` subfolder or flat in `dir` itself, so the
-/// Source Control panel only ever touches what's actually the workspace
-/// (never unrelated files elsewhere in the same repo, in hidden mode).
+/// Mirrors storage::detect_layout. Hidden mode keeps Source Control scoped
+/// to .relay/ only, not the whole repo.
 fn relay_pathspec(dir: &str) -> &'static str {
     if Path::new(dir).join(".relay").join("workspace.relay").exists() {
         ".relay"
@@ -71,9 +67,8 @@ fn status_label(code: &str) -> String {
     }
 }
 
-/// Returns None when `dir` isn't inside a git work tree (or `git` isn't
-/// installed) so the frontend can silently hide the Source Control panel
-/// instead of showing an error for the common case of a non-git workspace.
+/// None if `dir` isn't a git repo (or git isn't installed), so the frontend
+/// just hides the Source Control panel instead of erroring.
 #[tauri::command]
 pub fn git_status(dir: String) -> Result<Option<GitStatusInfo>, String> {
     let path = Path::new(&dir);
@@ -81,19 +76,17 @@ pub fn git_status(dir: String) -> Result<Option<GitStatusInfo>, String> {
         return Ok(None);
     }
 
-    // symbolic-ref resolves the branch name even before the first commit
-    // exists (an "unborn" branch), unlike rev-parse --abbrev-ref.
+    // symbolic-ref works even on an unborn branch (no commits yet), unlike
+    // rev-parse --abbrev-ref.
     let branch = match run_git(path, &["symbolic-ref", "--short", "-q", "HEAD"]) {
         Ok(name) if !name.is_empty() => name,
         _ => run_git(path, &["rev-parse", "--short", "HEAD"]).unwrap_or_else(|_| "no commits yet".to_string()),
     };
 
-    // In hidden mode, scope to .relay/ only — `dir` is the folder the user
-    // picked, which is very likely an existing project's repo, and its
-    // unrelated files should never show up as "changes" here. In flat mode
-    // the whole folder legitimately is the workspace, so "." is correct.
-    // --untracked-files=all: without it, a wholly-untracked .relay/ directory
-    // collapses to a single "?? .relay/" line instead of listing each file.
+    // Hidden mode scopes to .relay/ only, since `dir` is usually an existing
+    // project's repo and its other files shouldn't show as changes here.
+    // --untracked-files=all: otherwise an untracked .relay/ dir collapses to
+    // one "?? .relay/" line instead of listing each file.
     let pathspec = relay_pathspec(&dir);
     let raw = run_git(path, &["status", "--porcelain", "--untracked-files=all", "--", pathspec])?;
     let prefix = format!("{}/", pathspec);
@@ -111,14 +104,9 @@ pub fn git_status(dir: String) -> Result<Option<GitStatusInfo>, String> {
     Ok(Some(GitStatusInfo { branch, files }))
 }
 
-/// Whether `p` (a path relative to the workspace root) is an actual
-/// request/gRPC node file — as opposed to storage-layer bookkeeping that
-/// also happens to end in `.relay`: `_folder.relay` (folder metadata),
-/// `workspace.relay` (root workspace name/variables/environment list), or
-/// anything under `environments/` (environment definitions, not requests).
-/// Without this, those show up in diffs/history looking exactly like a
-/// modified request — e.g. the workspace's own name reads as a request
-/// named after it with "no URL set".
+/// Whether `p` is an actual request/gRPC file, not storage bookkeeping that
+/// also ends in `.relay`: _folder.relay, workspace.relay, or anything under
+/// environments/. Otherwise those show up in diffs looking like requests.
 fn is_request_file(p: &str) -> bool {
     if !p.ends_with(".relay") {
         return false;
@@ -133,11 +121,10 @@ fn is_request_file(p: &str) -> bool {
     true
 }
 
-/// Finds the `.relay` file whose own JSON body carries `"id": target_id` —
-/// request/gRPC node ids are stable across renames, but the filename is
-/// name-derived (see storage::slugify) and changes when the request is
-/// renamed, so the frontend can't just remember a path. Searching by content
-/// also means this needs no knowledge of storage's slug/folder-nesting rules.
+/// Finds the `.relay` file whose JSON body has `"id": target_id`. Filenames
+/// are slug-derived and change on rename, so the frontend can't just cache
+/// a path; searching by content also avoids duplicating storage's slug
+/// rules.
 fn find_file_by_id(base: &Path, target_id: &str) -> Option<PathBuf> {
     let entries = fs::read_dir(base).ok()?;
     for entry in entries.flatten() {
@@ -164,10 +151,9 @@ fn find_file_by_id(base: &Path, target_id: &str) -> Option<PathBuf> {
     None
 }
 
-/// Per-request commit history — the file's whole content at each commit that
-/// touched it, so the frontend can diff consecutive versions into an
-/// "API changed" summary instead of a raw text diff. `--follow` tracks the
-/// file across renames (its filename is derived from the request's name).
+/// Per-request commit history: full file content at each commit that
+/// touched it, so the frontend can diff versions into an "API changed"
+/// summary. --follow keeps tracking the file across renames.
 #[tauri::command]
 pub fn git_history_for_node(dir: String, node_id: String) -> Result<Vec<ApiHistoryEntry>, String> {
     let path = Path::new(&dir);
@@ -225,11 +211,9 @@ pub struct BranchDiffEntry {
     pub status: String, // "added" | "removed" | "modified"
     pub before: Option<String>,
     pub after: Option<String>,
-    // HEAD's content for this path, ONLY populated in working-tree mode
-    // (`compare: None`) — lets the frontend split "committed vs base" from
-    // "uncommitted on top of HEAD" instead of treating the whole base-vs-
-    // working-tree diff as one undifferentiated blob. None in branch-vs-
-    // branch mode, where the entire diff is committed by definition.
+    // HEAD's content for this path, only set in working-tree mode
+    // (compare: None). Lets the frontend split "committed vs base" from
+    // "uncommitted on top of HEAD" instead of one undifferentiated diff.
     pub head: Option<String>,
 }
 
@@ -237,28 +221,15 @@ fn node_id_of(content: &Option<String>) -> Option<String> {
     content.as_ref().and_then(|c| serde_json::from_str::<Value>(c).ok())?.get("id").and_then(|v| v.as_str()).map(String::from)
 }
 
-/// Every request that differs between two refs, matched by content — a
-/// renamed request shows up as one path missing on `base` and one missing on
-/// `compare`; before treating those as a genuine add+delete pair, this
-/// matches them by their JSON `id` (stable across renames) so a rename
-/// (with or without content changes) still reads as one "modified" entry
-/// instead of a misleading delete-and-recreate.
-/// `compare: None` diffs `base` against the current working tree instead of
-/// another ref — `git diff <base>` (no second ref) naturally reflects both
-/// staged AND unstaged changes combined, since it's just comparing against
-/// whatever's on disk right now. `git diff` alone never surfaces fully
-/// untracked files (never `git add`ed even once — a brand-new request
-/// nobody has staged yet), so those are folded in separately via
-/// `git status` below, working-tree mode only (an untracked file has no
-/// place in a plain branch-vs-branch comparison, since it was never part of
-/// any commit on either side).
-/// `include_head`: whether to also fetch each changed file's HEAD content
-/// (for the committed-vs-uncommitted line tagging in Compare Branches).
-/// This costs one extra `git show HEAD:path` subprocess per changed file,
-/// so callers that don't use `.head` (StageCommitModal) or that only need
-/// it for entries a user actually expands (BranchComparePanel — see
-/// `git_show_at_ref` for the on-demand alternative) should pass `false` to
-/// keep the bulk fetch fast regardless of how many files changed.
+/// Diffs two refs (or a ref vs the working tree when `compare` is None).
+/// Renames are matched by JSON `id` (stable across renames) so a renamed
+/// request reads as one "modified" entry instead of delete+add.
+/// `compare: None` also picks up untracked files via `git status`, since
+/// plain `git diff` never shows a file that was never staged once.
+/// `include_head`: also fetches each file's HEAD content, for the
+/// committed-vs-uncommitted line tagging in Compare Branches. Costs one
+/// extra `git show` per file, so bulk callers (StageCommitModal) skip it
+/// and BranchComparePanel only fetches it per entry via git_show_at_ref.
 #[tauri::command]
 pub fn git_branch_diff(dir: String, base: String, compare: Option<String>, include_head: bool) -> Result<Vec<BranchDiffEntry>, String> {
     let path = Path::new(&dir);
@@ -293,13 +264,12 @@ pub fn git_branch_diff(dir: String, base: String, compare: Option<String>, inclu
                     modified_paths.push(p.to_string());
                 }
             }
-            // Rename/copy lines are 3 fields (STATUS, old-path, new-path) — git's
-            // own similarity heuristic reports these instead of a plain D+A pair
-            // whenever two .relay files happen to look alike (small JSON files
-            // sharing most of their boilerplate trigger this easily). Feed both
-            // sides into removed/added so the existing node-id reconciliation
-            // below still recognizes "same request, moved" as one modified entry
-            // instead of silently dropping both paths (neither A nor D matched).
+            // R/C lines are 3 fields (status, old path, new path). git's
+            // rename heuristic reports these instead of D+A when two .relay
+            // files look similar enough (easy with near-identical JSON
+            // boilerplate). Feed both paths into removed/added so the
+            // id-matching below still catches "same request, moved" instead
+            // of dropping both silently.
             Some('R') | Some('C') => {
                 if let Some(old_p) = parts.get(1).copied().filter(|p| is_request_file(p)) {
                     removed_paths.push(old_p.to_string());
@@ -327,21 +297,17 @@ pub fn git_branch_diff(dir: String, base: String, compare: Option<String>, inclu
     }
 
     let show_at = |rev: &str, p: &str| run_git(path, &["show", &format!("{}:{}", rev, p)]).ok();
-    // Working-tree content is read straight off disk (not via `git show`,
-    // which only knows about commits) — this is what makes it reflect
-    // staged AND unstaged edits alike, exactly as they currently sit.
+    // Working-tree content comes straight off disk, not via `git show`
+    // (commits only), so it reflects staged and unstaged edits alike.
     let show_compare = |p: &str| match &compare {
         Some(c) => show_at(c, p),
         None => fs::read_to_string(path.join(p)).ok(),
     };
 
-    // When `base` IS "HEAD" (StageCommitModal's every call — it diffs
-    // HEAD-vs-working-tree, never uses `head` at all), `before` already IS
-    // HEAD's content — reusing it avoids a second `git show` subprocess per
-    // file for a value that would be byte-identical anyway. That redundant
-    // spawn (on top of the `before`/`after` ones already happening per
-    // file) was doubling the process count on every Source Control open,
-    // which is what made it noticeably laggy on repos with several changes.
+    // When base is "HEAD" (StageCommitModal's only case), `before` already
+    // equals HEAD's content, so reuse it instead of spawning a second
+    // `git show` per file. That extra subprocess was doubling the process
+    // count on every Source Control open and made it laggy.
     let head_of = |p: &str, before_content: &Option<String>| -> Option<String> {
         if !include_head || compare.is_some() {
             return None;
@@ -383,10 +349,9 @@ pub fn git_branch_diff(dir: String, base: String, compare: Option<String>, inclu
     Ok(entries)
 }
 
-/// On-demand single-file lookup for whatever `git_branch_diff` skipped when
-/// called with `include_head: false` — used to fetch one entry's HEAD
-/// content only once a user actually expands it in Compare Branches,
-/// instead of every changed file paying for it upfront.
+/// On-demand single-file lookup for what git_branch_diff skipped with
+/// include_head: false. Fetches HEAD content only when a user expands an
+/// entry in Compare Branches, not upfront for every file.
 #[tauri::command]
 pub fn git_show_at_ref(dir: String, rev: String, path: String) -> Result<Option<String>, String> {
     let base_path = Path::new(&dir);
@@ -406,19 +371,17 @@ pub fn git_commit(dir: String, message: String) -> Result<(), String> {
     if message.trim().is_empty() {
         return Err("Commit message is required".to_string());
     }
-    // Scoped the same way git_status is — see relay_pathspec.
+    // Scoped the same way as git_status, see relay_pathspec.
     let pathspec = relay_pathspec(&dir);
     run_git(path, &["add", "-A", pathspec])?;
     run_git(path, &["commit", "-m", message.trim()])?;
     Ok(())
 }
 
-/// Stages exactly the given paths (relative to `dir`) — for API-aware
-/// partial-field staging, where the frontend has already rewritten a file's
-/// on-disk content to a merge of only the selected fields before calling
-/// this, and everything else in the working tree must stay untouched.
-/// `git add -- <path>` stages creates, modifies, AND deletions of a specific
-/// tracked path alike, so this covers added/modified/removed uniformly.
+/// Stages exactly the given paths. Used for partial-field staging, where
+/// the frontend has already merged just the selected fields into the file
+/// on disk and everything else must stay untouched. `git add -- <path>`
+/// covers create/modify/delete uniformly for a specific path.
 #[tauri::command]
 pub fn git_add(dir: String, paths: Vec<String>) -> Result<(), String> {
     if paths.is_empty() {
@@ -431,9 +394,9 @@ pub fn git_add(dir: String, paths: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// Commits whatever is currently staged, without touching the index first —
-/// the counterpart to `git_add` above for partial-field staging. `git_commit`
-/// stays as `add -A` + commit for the simple "commit everything" flow.
+/// Commits whatever is currently staged, without touching the index.
+/// Counterpart to git_add for partial-field staging; git_commit stays
+/// add -A + commit for the "commit everything" flow.
 #[tauri::command]
 pub fn git_commit_staged(dir: String, message: String) -> Result<(), String> {
     let path = Path::new(&dir);
@@ -469,8 +432,8 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    // relay_pathspec detects hidden mode by checking for .relay/workspace.relay
-    // — real saves always write that file, so tests need a stub of it too.
+    // relay_pathspec detects hidden mode via .relay/workspace.relay; real
+    // saves always write that file, so tests need a stub too.
     fn init_hidden_relay(dir: &std::path::Path) {
         fs::create_dir_all(dir.join(".relay")).unwrap();
         fs::write(dir.join(".relay").join("workspace.relay"), "{}").unwrap();
@@ -490,11 +453,9 @@ mod tests {
 
     #[test]
     fn reports_a_single_unstaged_modification_with_the_full_path() {
-        // Regression test for a run_git bug: `.trim()` on the whole porcelain
-        // output ate the leading space of " M path" whenever it was the
-        // FIRST (and only) character of the output — a lone unstaged-only
-        // modification, the single most common status a user can have —
-        // silently truncating the reported path's first character.
+        // Regression test: .trim() on the whole porcelain output used to eat
+        // the leading space of " M path" when it was the first character,
+        // truncating the reported path.
         let dir = tmp_repo("single-unstaged-mod");
         init_hidden_relay(&dir);
         fs::write(dir.join(".relay").join("a.relay"), "{}").unwrap();
@@ -515,8 +476,8 @@ mod tests {
         let dir = tmp_repo("scoped");
         init_hidden_relay(&dir);
         fs::write(dir.join(".relay").join("a.relay"), "{}").unwrap();
-        // Simulate an unrelated project file sitting next to .relay/ in the
-        // same repo — it must never show up in Relay's own status/commit.
+        // Unrelated project file next to .relay/ in the same repo, must
+        // never show up in Relay's status/commit.
         fs::write(dir.join("package.json"), "{}").unwrap();
 
         let info = git_status(dir.to_string_lossy().to_string()).unwrap().unwrap();
@@ -558,8 +519,8 @@ mod tests {
 
     #[test]
     fn flat_mode_scopes_to_whole_repo() {
-        // No .relay/workspace.relay stub — relay_pathspec should fall back
-        // to "." and pick up a file sitting directly at the repo root.
+        // No .relay/workspace.relay stub, so relay_pathspec falls back to
+        // "." and picks up a file at the repo root.
         let dir = tmp_repo("flat-mode");
         fs::write(dir.join("get-repo.relay"), "{}").unwrap();
         let info = git_status(dir.to_string_lossy().to_string()).unwrap().unwrap();
@@ -611,9 +572,8 @@ mod tests {
 
     #[test]
     fn history_follows_the_file_across_a_rename() {
-        // Renaming the request changes its slug (storage::slugify), so this
-        // proves --follow (git's rename-similarity heuristic) plus finding
-        // the file by its current name still recovers the full history.
+        // Renaming changes the slug (storage::slugify); proves --follow
+        // plus finding the file by its current name still gets full history.
         let dir = tmp_repo("history-rename");
         init_hidden_relay(&dir);
         let old_file = dir.join(".relay").join("old-name.relay");
@@ -621,11 +581,10 @@ mod tests {
         fs::write(&old_file, r#"{"id":"req-2","name":"Old Name","request":{"method":"GET","url":"/x"}}"#).unwrap();
         git_commit(dir.to_string_lossy().to_string(), "initial".to_string()).unwrap();
 
-        // Rename-only commit first (identical content) — git's rename
-        // detection is a whole-blob similarity check, and a single-line JSON
-        // file has no partial-line matching to fall back on, so renaming
-        // and editing content in the very same commit can register as a
-        // plain delete+add instead of a detected rename.
+        // Rename-only commit first. git's rename detection is a whole-blob
+        // similarity check, and a single-line JSON file has no partial-line
+        // match to fall back on, so renaming + editing in the same commit
+        // can register as delete+add instead of a detected rename.
         let new_file = dir.join(".relay").join("new-name.relay");
         fs::rename(&old_file, &new_file).unwrap();
         git_commit(dir.to_string_lossy().to_string(), "rename".to_string()).unwrap();
@@ -698,26 +657,20 @@ mod tests {
 
     #[test]
     fn branch_diff_treats_an_unrelated_swap_as_remove_plus_add_not_a_dropped_rename() {
-        // Regression test: two real Relay request files share almost all of
-        // their JSON boilerplate (bodyForm/bodyUrlencoded/settings/etc are
-        // near-identical across any two requests) — deleting one and adding
-        // a completely unrelated one in the same commit crosses git's default
-        // rename-similarity threshold, so `git diff --name-status` reports a
-        // single `R061 old new` line instead of separate `D`/`A` lines. The
-        // parser used to only match on the first char of A/D/M, so an R line
-        // matched none of them and BOTH paths silently vanished from the
-        // diff — a real request swap showed as "no changes" in Compare
-        // Branches. Deliberately does NOT use checkout_new_branch/two refs
-        // (see branch_diff_matches_a_rename_across_branches_as_modified
-        // above) — this exercises the base-vs-working-tree (`compare: None`)
-        // path, which is where this was actually observed.
+        // Regression test: two Relay request files share almost all their
+        // JSON boilerplate, so deleting one and adding an unrelated one in
+        // the same commit crosses git's rename threshold and shows up as a
+        // single R line instead of separate D/A lines. The old parser only
+        // matched A/D/M, so the R line matched nothing and both paths
+        // vanished, a real swap looked like "no changes" in Compare
+        // Branches. Uses compare: None (base-vs-working-tree) since that's
+        // where this was actually observed.
         let dir = tmp_repo("branch-diff-unrelated-swap");
         init_hidden_relay(&dir);
-        // Pretty-printed, one-field-per-line — matches storage.rs's actual
-        // on-disk format (serde_json::to_string_pretty), which is what makes
-        // two otherwise-unrelated requests byte-similar enough to cross
-        // git's rename threshold in practice; a minified single-line version
-        // of this same JSON does NOT reproduce the bug.
+        // Pretty-printed to match storage.rs's actual on-disk format
+        // (serde_json::to_string_pretty). That's what makes two unrelated
+        // requests byte-similar enough to cross git's rename threshold, a
+        // minified version of the same JSON doesn't reproduce this.
         let boilerplate = |id: &str, method: &str, url: &str| {
             format!(
                 r#"{{
@@ -759,9 +712,8 @@ mod tests {
         fs::write(dir.join(".relay").join("new-name.relay"), boilerplate("new-id", "POST", "/transactions/bulk")).unwrap();
         git_commit(dir.to_string_lossy().to_string(), "swap".to_string()).unwrap();
 
-        // Sanity check this scenario really does trigger git's own rename
-        // detection (i.e. this test would have caught the bug) rather than
-        // happening to land on a code path that was never affected.
+        // Sanity check this actually triggers git's rename detection, so
+        // the test would have caught the bug.
         let raw = run_git(&dir, &["diff", "--name-status", "HEAD~1", "--", ".relay"]).unwrap();
         assert!(raw.starts_with('R'), "test setup didn't trigger a rename line, got: {raw}");
 
@@ -822,8 +774,8 @@ mod tests {
 
     #[test]
     fn branch_diff_against_working_tree_sees_a_brand_new_untracked_file() {
-        // A file `git add` has never touched (a newly-created request nobody
-        // has staged yet) — plain `git diff` alone would miss this entirely.
+        // A file git add has never touched. Plain git diff alone would
+        // miss this entirely.
         let dir = tmp_repo("branch-diff-untracked");
         init_hidden_relay(&dir);
         fs::write(dir.join(".relay").join("existing.relay"), r#"{"id":"existing-id","request":{"url":"/x"}}"#).unwrap();
@@ -842,11 +794,10 @@ mod tests {
 
     #[test]
     fn branch_diff_reuses_before_as_head_when_base_is_head_itself() {
-        // StageCommitModal always calls with base="HEAD" and never reads
-        // `.head` at all — when base IS HEAD, `before` and `head` would be
-        // byte-identical, so head_of should reuse `before` instead of
-        // spawning a second `git show HEAD:path` per file (this used to
-        // double the git subprocess count on every Source Control open).
+        // StageCommitModal calls with base="HEAD" and never reads .head.
+        // When base is HEAD, before and head are byte-identical, so head_of
+        // should reuse before instead of a second git show per file (this
+        // used to double the subprocess count on every Source Control open).
         let dir = tmp_repo("branch-diff-head-reuse");
         init_hidden_relay(&dir);
         fs::write(dir.join(".relay").join("req.relay"), r#"{"id":"req-id","request":{"method":"GET","url":"/before"}}"#).unwrap();
@@ -866,10 +817,9 @@ mod tests {
 
     #[test]
     fn branch_diff_skips_head_entirely_when_include_head_is_false() {
-        // BranchComparePanel's initial bulk load passes include_head=false —
-        // this is what keeps opening Compare Branches fast regardless of how
-        // many files changed, deferring the one-git-show-per-file cost to
-        // git_show_at_ref, called only for entries a user actually expands.
+        // BranchComparePanel's bulk load passes include_head=false, which
+        // keeps opening Compare Branches fast regardless of file count. The
+        // per-file cost defers to git_show_at_ref, only when a user expands.
         let dir = tmp_repo("branch-diff-no-head");
         init_hidden_relay(&dir);
         fs::write(dir.join(".relay").join("req.relay"), r#"{"id":"req-id","request":{"url":"/before"}}"#).unwrap();
@@ -901,10 +851,9 @@ mod tests {
 
     #[test]
     fn branch_diff_excludes_workspace_meta_and_environment_files() {
-        // Regression test: workspace.relay (root name/variables/env list) and
-        // environments/*.relay are NOT requests — they used to slip through
-        // the ".relay" extension filter and show up in the diff looking
-        // exactly like a modified request named after the workspace itself.
+        // Regression test: workspace.relay and environments/*.relay aren't
+        // requests, but used to slip through the ".relay" extension filter
+        // and show up in the diff as a fake modified request.
         let dir = tmp_repo("branch-diff-excludes-meta");
         init_hidden_relay(&dir);
         fs::create_dir_all(dir.join(".relay").join("environments")).unwrap();
@@ -912,8 +861,8 @@ mod tests {
         fs::write(dir.join(".relay").join("real-request.relay"), r#"{"id":"req-1","request":{"method":"GET","url":"/x"}}"#).unwrap();
         git_commit(dir.to_string_lossy().to_string(), "base".to_string()).unwrap();
 
-        // Change the workspace name (rewrites workspace.relay), an environment,
-        // AND a real request, all in the same commit.
+        // Change the workspace name, an environment, and a real request,
+        // all in the same commit.
         fs::write(dir.join(".relay").join("workspace.relay"), r#"{"name":"renamed-workspace","variables":[],"activeEnvironmentId":null,"protoLibrary":[],"order":[],"environmentOrder":[]}"#).unwrap();
         fs::write(dir.join(".relay").join("environments").join("local.relay"), r#"{"id":"env-1","name":"Local","variables":[{"key":"x"}]}"#).unwrap();
         fs::write(dir.join(".relay").join("real-request.relay"), r#"{"id":"req-1","request":{"method":"POST","url":"/x"}}"#).unwrap();

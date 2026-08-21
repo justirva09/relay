@@ -111,7 +111,7 @@ export function useTreeActions(
         const idSet = new Set(nodeIds.filter((id) => id !== targetId));
         if (idSet.size === 0) return ws;
 
-        // Never drop a folder into its own descendant — checked against every dragged node.
+        // Never drop a folder into its own descendant, checked against every dragged node.
         const hasDescendant = (nodes: TreeNode[], id: string): boolean => {
           for (const n of nodes) {
             if (n.id === id) return true;

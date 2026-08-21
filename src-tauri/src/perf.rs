@@ -2,11 +2,9 @@ use serde::Serialize;
 use std::sync::Mutex;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
-// A persistent System instance (Tauri-managed state) rather than a fresh
-// one per call — sysinfo needs at least ~200ms between two refreshes of the
-// same process to compute a meaningful CPU% delta; reusing one instance
-// across polls means every call after the first naturally has that gap,
-// since the frontend polls every few seconds anyway.
+// Persistent System instance instead of a fresh one per call. sysinfo needs
+// ~200ms between refreshes to get a real CPU% delta, and the frontend
+// polls every few seconds so reusing one instance covers that.
 pub struct PerfState(pub Mutex<System>);
 
 impl Default for PerfState {

@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-// Renders its children into a portal on document.body, positioned with
-// `fixed` coordinates computed from anchorRef's bounding box. Dropdowns
-// nested inside a scrollable panel get clipped by that panel's `overflow`
-// regardless of z-index — portaling escapes that clipping ancestor entirely.
+// renders children into a portal on document.body, positioned with `fixed`
+// coordinates from anchorRef's bounding box. dropdowns nested inside a
+// scrollable panel get clipped by that panel's `overflow` regardless of
+// z-index, portaling escapes that clipping ancestor entirely
 const FloatingMenu = React.forwardRef<
   HTMLDivElement,
   {

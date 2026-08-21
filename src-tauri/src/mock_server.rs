@@ -1,8 +1,5 @@
-// A local stand-in HTTP server — not the real backend. It knows the *shape*
-// of a workspace's HTTP requests (method + path) and replies with whatever
-// example response is on hand for that request (the same local response
-// cache the app already keeps), so a frontend can develop against an API
-// that isn't running yet, without touching a real staging/prod server.
+// Local mock server. Matches method + path against saved examples or the
+// response cache, no real backend needed.
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -25,30 +22,20 @@ impl Default for MockServerState {
 struct ResolvedExample {
     status: u16,
     body: String,
-    // Response headers saved on the example itself (ExamplesTab's header
-    // editor) — e.g. overriding Content-Type for a non-JSON mock body, or
-    // adding a custom header a real client would check for.
+    // Headers saved on the example itself, e.g. a custom Content-Type for a non-JSON body.
     headers: Vec<(String, String)>,
     is_default: bool,
-    // The X-Mock-Scenario value that selects this example — the example's
-    // own `scenarioKey` if it set one, else a slugified `name`. Resolved
-    // once here so `pick_example` just compares strings.
+    // Scenario key for X-Mock-Scenario matching, resolved once here.
     key: String,
 }
 
-// Hop-by-hop / connection-framing headers that only make sense for the
-// original connection they were captured on — "Save as example" copies a
-// real response's headers verbatim (see App.tsx's onSaveExample), so an
-// example built from a real API's response can easily carry a stale
-// Content-Length or a Transfer-Encoding: chunked that doesn't match what's
-// actually being served now. Forwarding those breaks the response framing
-// at the protocol level (hyper/the client sees a body length that doesn't
-// match what's declared) — axum/hyper must compute these themselves.
+// Hop-by-hop headers tied to the original connection. A saved example can
+// carry a stale Content-Length or chunked encoding that breaks response
+// framing if forwarded, so let axum/hyper compute these instead.
 const NON_FORWARDABLE_HEADERS: [&str; 6] = ["content-length", "transfer-encoding", "connection", "keep-alive", "host", "content-encoding"];
 
-// Example.headers is `[string, string][]` on the TS side — parsed
-// leniently (skip any entry that isn't a 2-element string array) rather
-// than failing the whole example on one malformed row.
+// Example.headers is [string, string][] on the TS side, parsed leniently
+// so one malformed row doesn't fail the whole example.
 fn parse_example_headers(value: &Value) -> Vec<(String, String)> {
     value
         .as_array()
@@ -75,11 +62,8 @@ struct MockRoute {
     examples: Vec<ResolvedExample>,
 }
 
-// An example's scenario key is derived from its name rather than stored as
-// a separate field — "Not Found" and a request header `X-Mock-Scenario:
-// not-found` line up without the user ever typing a slug anywhere. Same
-// algorithm on the TS side (ExamplesTab) so the hint shown in the UI always
-// matches what the server actually matches against.
+// Slug derived from the example name, so "Not Found" matches
+// X-Mock-Scenario: not-found. Same algorithm runs on the TS side.
 fn slugify(name: &str) -> String {
     let mut out = String::new();
     let mut last_was_dash = true; // swallow leading dashes
@@ -98,8 +82,7 @@ fn slugify(name: &str) -> String {
     out
 }
 
-// OpenAPI/Postman-style URLs often start with a "{{base_url}}"-type variable
-// or a full scheme+host — a mock server only cares about the path.
+// Strip a {{base_url}}-style var or a full scheme+host, the mock server only needs the path.
 fn extract_path_template(url: &str) -> String {
     let mut s = url.trim();
     if let Some(rest) = s.strip_prefix("{{") {
@@ -163,9 +146,7 @@ fn resolve_examples(examples: &Value, cached_response: Option<&Value>) -> Vec<Re
             .enumerate()
             .map(|(i, e)| {
                 let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("example");
-                // scenarioKey overrides the name-derived slug when the user
-                // set one explicitly (see ExamplesTab.tsx) — trim+ignore an
-                // empty override so clearing the field falls back cleanly.
+                // Explicit scenarioKey overrides the name-derived slug; a blank one falls back to the name.
                 let key = e
                     .get("scenarioKey")
                     .and_then(|v| v.as_str())
@@ -177,17 +158,14 @@ fn resolve_examples(examples: &Value, cached_response: Option<&Value>) -> Vec<Re
                     status: e.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16,
                     body: e.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     headers: e.get("headers").map(parse_example_headers).unwrap_or_default(),
-                    // Same "isDefault flag, else first" fallback as before —
-                    // just resolved once here instead of at lookup time.
+                    // isDefault flag, else first example, resolved once here.
                     is_default: e.get("isDefault").and_then(|v| v.as_bool()).unwrap_or(false) || (!has_default && i == 0),
                     key,
                 }
             })
             .collect();
     }
-    // No persisted examples yet — fall back to the ephemeral response cache
-    // (a request nobody has saved an example for still mocks from its last
-    // real send), then a placeholder note if there's no cache either.
+    // No saved examples: fall back to the cached response, then a placeholder.
     match cached_response {
         Some(resp) => vec![ResolvedExample {
             status: resp.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16,
@@ -226,11 +204,9 @@ fn build_routes(workspace: &Value, response_cache: &Value) -> Vec<MockRoute> {
         .collect()
 }
 
-// `X-Mock-Scenario: not-found` picks the example whose resolved key is
-// "not-found" (see `resolve_examples` — either an explicit scenarioKey or a
-// slugified name) — absent the header, the default example wins. An
-// unrecognized scenario key is a caller mistake worth surfacing distinctly
-// rather than silently falling back to the default.
+// Matches X-Mock-Scenario against resolved keys; no header means use the
+// default. An unrecognized key returns an error instead of silently
+// falling back.
 fn pick_example<'a>(examples: &'a [ResolvedExample], scenario: Option<&str>) -> Result<&'a ResolvedExample, Vec<String>> {
     if let Some(key) = scenario {
         let wanted = slugify(key);
@@ -250,22 +226,17 @@ fn json_response(status: u16, body: String) -> Response {
     example_response(status, body, &[])
 }
 
-// Same as json_response, but layers an example's own saved headers on top —
-// a header the user set explicitly (e.g. Content-Type: application/xml for
-// a non-JSON mock body) overrides the application/json default rather than
-// being sent alongside a conflicting duplicate.
+// Same as json_response but layers the example's saved headers on top, so
+// an explicit Content-Type overrides the JSON default.
 fn example_response(status: u16, body: String, headers: &[(String, String)]) -> Response {
     let mut builder = Response::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
     if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
         builder = builder.header("content-type", "application/json");
     }
     for (k, v) in headers {
-        // A captured real-world header value can contain bytes HeaderValue
-        // rejects (control chars, non-ASCII) — .header() silently records
-        // the error internally rather than panicking immediately, but
-        // .body() below would panic on it. Validate up front and just skip
-        // that one header instead of taking down the whole response (and,
-        // via the connection abruptly closing, the caller's request).
+        // A captured header value can contain bytes HeaderValue rejects.
+        // .body() below would panic on it, so validate up front and skip
+        // the bad one instead of crashing the whole response.
         if axum::http::HeaderName::from_bytes(k.as_bytes()).is_ok() && axum::http::HeaderValue::from_str(v).is_ok() {
             builder = builder.header(k, v);
         }
@@ -278,11 +249,8 @@ struct MockContext {
     workspace_dir: String,
 }
 
-// Re-reads the workspace tree + response cache from disk on every request
-// instead of snapshotting routes once at server start — so saving a new
-// example (or editing a request) takes effect on the next mock hit without
-// having to Stop/Start the mock server. This is a local dev tool serving
-// occasional requests, so the extra file read per hit is negligible.
+// Re-reads workspace + cache from disk on every request so edits apply
+// without restarting the server. Fine for a local dev tool with occasional traffic.
 fn load_routes(ctx: &MockContext) -> Vec<MockRoute> {
     let workspace_raw = match crate::storage::load_workspace_dir(ctx.workspace_dir.clone()) {
         Ok(raw) => raw,
@@ -343,9 +311,8 @@ pub async fn start_mock_server(
         let _ = tx.send(());
     }
 
-    // Fail fast if there's genuinely no workspace here yet — once running,
-    // load_routes' per-request re-read tolerates transient read errors by
-    // just returning no routes (a 404) instead of crashing the server.
+    // Fail fast if there's no workspace yet; once running, load_routes
+    // just 404s on transient read errors instead of crashing.
     let workspace_raw = crate::storage::load_workspace_dir(workspace_dir.clone())?;
     let envelope: Value = serde_json::from_str(&workspace_raw).map_err(|e| e.to_string())?;
     if envelope.get("workspace").map(|w| w.is_null()).unwrap_or(true) {
@@ -428,7 +395,7 @@ mod tests {
                 serde_json::json!([{ "id": "e1", "name": "Not Found", "status": 404, "body": "{\"code\":\"NOT_FOUND\"}", "isDefault": true }])
             )]
         });
-        // Stale cache from an old real send — should be ignored once an example exists.
+        // Stale cache from an old send, ignored once an example exists.
         let cache = serde_json::json!({ "req-1": { "kind": "http", "response": { "status": 200, "body": "stale" } } });
         let routes = build_routes(&workspace, &cache);
         assert_eq!(routes.len(), 1);
@@ -521,12 +488,9 @@ mod tests {
 
     #[test]
     fn parse_example_headers_drops_hop_by_hop_headers() {
-        // A real "Save as example" capture carries these straight from the
-        // live response — replaying a stale Content-Length/Transfer-Encoding
-        // against a differently-sized mock body breaks the response framing
-        // at the protocol level (this was a real bug: the mock server showed
-        // "Running" but every request failed with a client-side connection
-        // error, not an HTTP error).
+        // Real bug once: a captured Content-Length/Transfer-Encoding against
+        // a differently-sized mock body broke response framing. Server
+        // showed "Running" but every request failed with a connection error.
         let headers = parse_example_headers(&serde_json::json!([
             ["Content-Length", "1234"],
             ["Transfer-Encoding", "chunked"],
@@ -560,16 +524,14 @@ mod tests {
     fn example_response_custom_content_type_overrides_the_json_default() {
         let resp = example_response(200, "<a/>".to_string(), &[("Content-Type".to_string(), "application/xml".to_string())]);
         assert_eq!(header_value(&resp, "content-type"), Some("application/xml"));
-        // Exactly one content-type header — not the custom one alongside a
-        // leftover "application/json" default.
+        // Exactly one content-type header, not the custom one plus a leftover default.
         assert_eq!(resp.headers().get_all("content-type").iter().count(), 1);
     }
 
     #[test]
     fn example_response_skips_an_invalid_header_value_instead_of_panicking() {
         // A header value with a raw newline/control char is invalid for
-        // HeaderValue — must be dropped, not crash the whole response (and
-        // the connection along with it).
+        // HeaderValue, drop it instead of crashing the response.
         let resp = example_response(200, "{}".to_string(), &[("X-Bad".to_string(), "line1\nline2".to_string()), ("X-Good".to_string(), "fine".to_string())]);
         assert_eq!(header_value(&resp, "x-bad"), None);
         assert_eq!(header_value(&resp, "x-good"), Some("fine"));

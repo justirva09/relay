@@ -164,9 +164,8 @@ function StatCard({ icon, accent, label, tooltip, value, caption }: {
   );
 }
 
-// Polls Rust's sysinfo-backed get_perf_stats every 1.5s while this tab is
-// visible — a persistent System instance on the Rust side (see perf.rs)
-// means every call after the first gets an accurate CPU% delta.
+// Polls get_perf_stats every 1.5s while visible. A persistent System instance
+// on the Rust side means every call after the first gets an accurate CPU% delta.
 function PerformancePanel() {
   const [stats, setStats] = useState<PerfStats | null>(null);
 

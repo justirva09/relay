@@ -1,12 +1,11 @@
 import { TestResultDraft } from "./pm";
 
-// A self-contained runtime, embedded directly into the sandbox iframe's
-// `srcdoc` — it CANNOT import anything from this app's bundle, since the
-// iframe is a genuinely separate document/global scope (that's the whole
-// point: no window.__TAURI_INTERNALS__, no access to this page's JS at
-// all). This is a deliberately minimal re-implementation of buildPm() from
-// pm.ts — test/expect/environment/variables/request/response only, no
-// crypto-js — kept in sync by hand since the two can't share code.
+// self-contained runtime embedded in the sandbox iframe's srcdoc. can't import
+// anything from this app's bundle, the iframe is a genuinely separate document/
+// global scope on purpose: no window.__TAURI_INTERNALS__, no access to this
+// page's JS at all. minimal reimplementation of buildPm() from pm.ts
+// (test/expect/environment/variables/request/response only, no crypto-js),
+// kept in sync by hand since the two can't share code
 const SANDBOX_RUNTIME = `
 (function () {
   function makeExpect(actual) {
@@ -133,11 +132,9 @@ let nextId = 1;
 function createSandbox(): Promise<HTMLIFrameElement> {
   return new Promise((resolve) => {
     const iframe = document.createElement("iframe");
-    // The security boundary: "allow-scripts" lets the srcdoc content run JS
-    // at all, but deliberately NOT "allow-same-origin" — without it the
-    // iframe is treated as opaque-origin, which is what keeps it from ever
-    // seeing window.__TAURI_INTERNALS__ (Tauri's IPC bridge, injected only
-    // into the app's own top-level document) or anything else on this page.
+    // security boundary: "allow-scripts" lets the srcdoc content run JS, but no
+    // "allow-same-origin" on purpose. that keeps the iframe opaque-origin, so it
+    // never sees window.__TAURI_INTERNALS__ or anything else on this page
     iframe.sandbox.add("allow-scripts");
     iframe.style.display = "none";
     iframe.setAttribute("aria-hidden", "true");
@@ -162,9 +159,9 @@ function ensureSandbox(): Promise<HTMLIFrameElement> {
   return framePromise;
 }
 
-// Runs a pre-request/test script inside the sandbox iframe instead of this
-// page's own JS context — used when the workspace has Safe Mode on. See
-// SANDBOX_RUNTIME above for what the script actually gets access to.
+// runs a pre-request/test script inside the sandbox iframe instead of this
+// page's own JS context, used when Safe Mode is on. see SANDBOX_RUNTIME above
+// for what the script actually gets access to
 export async function runInSandbox(input: SandboxRunInput, timeoutMs = 5000): Promise<SandboxRunResult> {
   const iframe = await ensureSandbox();
   const id = nextId++;

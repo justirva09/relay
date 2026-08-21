@@ -1,10 +1,7 @@
-// Global, app-level console capture — separate from the per-request Console
-// tab in ResponsePanel (which only shows console.log output from a
-// request's own pre/test scripts). This one taps window.console itself
-// (log/info/warn/error/debug) plus uncaught errors and unhandled promise
-// rejections, so a user can self-diagnose "Relay is misbehaving" without
-// knowing how to open a real devtools inspector. Registers its taps at
-// module load — import this once, early (main.tsx), for side effects only.
+// app-level console capture, separate from the per-request Console tab in
+// ResponsePanel. Taps window.console plus uncaught errors/rejections so
+// users can self-diagnose without opening real devtools. Import once, early
+// (main.tsx), for the side effects.
 
 export type DevLogLevel = "log" | "info" | "warn" | "error" | "debug";
 

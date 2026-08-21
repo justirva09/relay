@@ -78,9 +78,8 @@ export function EnvironmentBar({ onShowOverview }: { onShowOverview: () => void 
   const { responseLayout, setResponseLayout, sidebarCollapsed, toggleSidebar, devToolsOpen, setDevToolsOpen } = useLayout();
   const { mockServerRunningPort, toggleMockServer, envModalTarget, closeEnvironmentModal, safeMode, openRunner } = useWorkspace();
 
-  // The {{variable}} click-to-navigate feature (RequestPanel/KeyValueEditor)
-  // has no direct handle on this component's local showModal state — it
-  // goes through envModalTarget in the store instead (see openEnvironmentModal).
+  // Click-to-navigate on a {{variable}} has no direct handle to this
+  // component's local state, it goes through envModalTarget instead.
   useEffect(() => {
     if (envModalTarget) setShowModal(true);
   }, [envModalTarget]);
@@ -293,16 +292,12 @@ function EnvironmentModal({ onClose, initialTab, highlightKey }: { onClose: () =
   const [flashedKey, setFlashedKey] = useState<string | null>(null);
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  // Re-triggering click-to-navigate while the modal is already open (e.g.
-  // clicking a variable from a different environment) should still jump —
-  // initialTab alone only sets the state's first value.
+  // Keep jumping tabs even if the modal's already open when a new variable gets clicked.
   useEffect(() => {
     if (initialTab) setTab(initialTab);
   }, [initialTab]);
 
-  // Scrolls to and briefly flashes the row for the variable that was
-  // ⌘/Ctrl-clicked — runs after the tab switch above so the row for the
-  // right scope is actually mounted by the time this looks for it.
+  // Runs after the tab switch above so the target row is actually mounted.
   useEffect(() => {
     if (!highlightKey) return;
     const el = rowRefs.current[highlightKey];

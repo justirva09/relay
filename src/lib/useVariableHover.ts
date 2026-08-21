@@ -15,11 +15,9 @@ export interface VariableInfoEntry {
 
 export type VariableInfo = Record<string, VariableInfoEntry>;
 
-// Where a variable's hover tooltip/click-to-navigate should point — mirrors
-// the actual resolution order (Global, then the active environment
-// overriding it) so the shown value matches what a send would substitute,
-// but still surfaces variables that only exist in a non-active environment
-// (so hovering one of those isn't blank just because it's not selected).
+// Mirrors real variable resolution (Global, then active environment
+// overrides it), so hover/click shows what a send would actually use. Still
+// surfaces vars from a non-active environment so hovering one isn't blank.
 export function buildVariableInfo(workspace: Workspace): VariableInfo {
   const info: VariableInfo = {};
   for (const v of workspace.variables) {
@@ -40,15 +38,10 @@ export function buildVariableInfo(workspace: Workspace): VariableInfo {
   return info;
 }
 
-// Finds the {{variable}} token (if any) whose span sits at these viewport
-// coordinates, by checking the overlay's actual rendered spans directly
-// (see urlHighlight.tsx's data-var attribute) — NOT by asking the browser
-// "what's the topmost element here" (document.caretRangeFromPoint /
-// elementFromPoint), because the overlay sits UNDER a transparent real
-// <input> (needed for actual text editing — see UrlInput/ValueInput) and
-// that hit-test would almost always resolve to the input instead of the
-// span beneath it. Comparing getBoundingClientRect() directly sidesteps
-// stacking/pointer-events entirely.
+// Checks the overlay's rendered spans directly instead of asking the
+// browser what's at these coordinates (elementFromPoint etc). The overlay
+// sits under a transparent real <input>, so that kind of hit-test would
+// just resolve to the input every time instead of the span underneath.
 function tokenAt(overlayEl: HTMLElement, clientX: number, clientY: number): string | null {
   const spans = overlayEl.querySelectorAll<HTMLElement>("[data-var]");
   for (const span of spans) {
@@ -60,11 +53,9 @@ function tokenAt(overlayEl: HTMLElement, clientX: number, clientY: number): stri
   return null;
 }
 
-// Tracks which {{variable}} token is under the mouse. `listenRef` is the
-// element that actually receives mouse events (the input sits on top, but
-// mousemove bubbles up to this shared ancestor); `overlayRef` is where the
-// token spans live. Uses rAF-throttled mousemove polling since the overlay
-// itself (pointer-events: none) can never receive hover events directly.
+// listenRef is the ancestor that actually gets mousemove (the input sits on
+// top of it); overlayRef is where the token spans live. rAF-throttled since
+// the overlay has pointer-events: none and can't get hover events itself.
 export function useVariableHover(listenRef: React.RefObject<HTMLElement>, overlayRef: React.RefObject<HTMLElement>): HoveredVar | null {
   const [hovered, setHovered] = useState<HoveredVar | null>(null);
   const frameRef = useRef<number | null>(null);
@@ -92,17 +83,14 @@ export function useVariableHover(listenRef: React.RefObject<HTMLElement>, overla
   return hovered;
 }
 
-// Same geometric lookup, exposed standalone for click handlers (which fire
-// once, synchronously, and don't need the hover hook's rAF polling/state).
+// Same lookup, standalone for click handlers that don't need the rAF/state overhead.
 export function variableTokenAtElement(overlayEl: HTMLElement | null, clientX: number, clientY: number): string | null {
   return overlayEl ? tokenAt(overlayEl, clientX, clientY) : null;
 }
 
-// Whether Cmd (mac) or Ctrl (Windows/Linux) is currently held — tracked via
-// window-level key listeners rather than reading e.metaKey off mousemove,
-// so the cursor updates the instant the modifier is pressed/released even
-// if the mouse hasn't moved since. Cleared on window blur so a modifier
-// released while the app wasn't focused doesn't get stuck "held".
+// Tracks Cmd/Ctrl via key listeners instead of e.metaKey on mousemove, so
+// the cursor updates immediately even without mouse movement. Cleared on
+// blur so it doesn't get stuck "held" after an alt-tab.
 export function useModifierHeld(): boolean {
   const [held, setHeld] = useState(false);
   useEffect(() => {

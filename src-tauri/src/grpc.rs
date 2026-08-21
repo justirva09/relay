@@ -56,11 +56,9 @@ pub struct GrpcInvokeResponse {
     pub duration_ms: u64,
 }
 
-/// tonic/hyper only understand http:// and https:// schemes. Accept the
-/// grpc:// / grpcs:// convention shown in the UI (and Postman) and rewrite
-/// it, and default a bare host with no scheme at all to TLS, since that's
-/// how virtually every hosted gRPC endpoint (behind an ALB/gateway) is
-/// actually reachable — matches Postman's "secured by default" behavior.
+/// tonic/hyper only understand http(s):// schemes. Rewrite the grpc(s)://
+/// convention from the UI, and default a bare host with no scheme to TLS
+/// since that's how most hosted gRPC endpoints are reachable.
 fn normalize_url(url: &str) -> (String, bool) {
     if let Some(rest) = url.strip_prefix("grpcs://") {
         (format!("https://{rest}"), true)
@@ -121,11 +119,9 @@ fn decode_file_descriptor_response(resp: MessageResponse) -> Result<FileDescript
     }
 }
 
-/// Recursively resolves a service's file and all its transitive proto dependencies
-/// into a single DescriptorPool, mirroring how grpcurl-style clients handle
-/// gRPC server reflection (a single `file_containing_symbol` call is not
-/// guaranteed to include imported files, so missing imports are fetched
-/// individually by filename until the whole dependency graph is present).
+/// Resolves a service's file plus all transitive proto dependencies into one
+/// DescriptorPool. `file_containing_symbol` isn't guaranteed to include
+/// imports, so missing ones get fetched by filename until nothing's left.
 async fn build_pool_for_service(url: &str, service: &str) -> Result<DescriptorPool, String> {
     let channel = connect(url).await?;
 
@@ -173,9 +169,8 @@ async fn build_pool_for_service(url: &str, service: &str) -> Result<DescriptorPo
 
 const BUF_VALIDATE_PROTO: &str = include_str!("wellknown/buf/validate/validate.proto");
 
-/// Resolves the `buf/validate/validate.proto` import used by protovalidate-annotated
-/// schemas (very common in Buf-managed proto repos), bundled the same way
-/// `GoogleFileResolver` bundles the core `google/protobuf/*.proto` well-known types.
+/// Resolves the buf/validate/validate.proto import used by protovalidate
+/// schemas, bundled the same way GoogleFileResolver bundles well-known types.
 struct BufValidateFileResolver;
 
 impl FileResolver for BufValidateFileResolver {
@@ -188,10 +183,9 @@ impl FileResolver for BufValidateFileResolver {
     }
 }
 
-/// Resolves imports against a fixed set of locally-attached .proto files, keyed by
-/// their path relative to the imported root directory — matching `import "pkg/sub/file.proto";`
-/// statements exactly, the same way `protoc -I` resolves them. Falls back to a basename
-/// match for files attached without directory structure (e.g. individually-picked files).
+/// Resolves imports against locally-attached .proto files, keyed by relative
+/// path like `protoc -I`. Falls back to a basename match for files attached
+/// without directory structure.
 struct MemoryFileResolver {
     files: HashMap<String, String>,
 }
@@ -211,20 +205,17 @@ impl FileResolver for MemoryFileResolver {
     }
 }
 
-/// Compiles a locally-attached .proto file (and its transitive imports, resolved
-/// from the same attached set, falling back to bundled google/protobuf well-known
-/// types) into a DescriptorPool, without any network reflection call.
+/// Compiles a locally-attached .proto file and its transitive imports into a
+/// DescriptorPool, no network reflection call needed.
 fn build_pool_from_proto_files(files: &[ProtoFileInput], entry_file: &str) -> Result<DescriptorPool, String> {
     let mut file_map = HashMap::new();
     for f in files {
         file_map.insert(f.name.clone(), f.content.clone());
     }
 
-    // Bundled well-known types are checked before the user's own attached files:
-    // proto repos commonly vendor local copies of `google/protobuf/*.proto` or
-    // `buf/validate/validate.proto` at those exact paths, and a stale/mismatched
-    // vendored copy can otherwise shadow our known-good bundled one and produce
-    // bogus import cycles.
+    // Bundled well-known types are checked first. Proto repos sometimes vendor
+    // their own copy of google/protobuf/*.proto, and a stale one can shadow
+    // our bundled copy and cause bogus import cycles.
     let mut resolver = ChainFileResolver::new();
     resolver.add(BufValidateFileResolver);
     resolver.add(GoogleFileResolver::new());
@@ -239,9 +230,8 @@ fn build_pool_from_proto_files(files: &[ProtoFileInput], entry_file: &str) -> Re
     Ok(compiler.descriptor_pool())
 }
 
-/// Syntax-only check (no import resolution) for which of the given files declare
-/// at least one `service`. Used to keep message/entity-only files out of the
-/// "active spec" picker — only files that are actually invokable belong there.
+/// Syntax-only check for which files declare at least one service, so
+/// message-only files don't show up in the "active spec" picker.
 #[tauri::command]
 pub fn list_proto_service_files(files: Vec<ProtoFileInput>) -> Vec<String> {
     files
@@ -370,9 +360,8 @@ impl Codec for DynamicCodec {
     }
 }
 
-// Field info for the frontend's message-editor autocomplete — one node per
-// proto field, with nested `fields` for message-typed fields (recursed with a
-// cycle guard so a self-referential message doesn't recurse forever).
+// Field info for the frontend's message-editor autocomplete, one node per
+// field, recursed with a cycle guard for self-referential messages.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtoFieldSchema {
@@ -424,8 +413,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
     }
 }
 
-// proto3 JSON mapping requires 64-bit ints as decimal strings, everything else
-// as a plain JSON number — matches what prost_reflect expects on the way back in.
+// proto3 JSON mapping wants 64-bit ints as decimal strings, everything else as a number.
 fn scalar_placeholder(kind: &Kind) -> serde_json::Value {
     match kind {
         Kind::Int64 | Kind::Uint64 | Kind::Sint64 | Kind::Fixed64 | Kind::Sfixed64 => json!("0"),
@@ -651,7 +639,7 @@ mod schema_tests {
         let pool = test_pool();
         let node = pool.get_message_by_name("test.Node").unwrap();
         let ancestors = HashSet::new();
-        // Node.children is `repeated Node` — must terminate instead of recursing forever.
+        // Node.children is `repeated Node`, must terminate instead of recursing forever.
         let template = message_template(&node, &ancestors);
         assert!(template.is_object());
     }

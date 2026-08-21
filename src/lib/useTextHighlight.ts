@@ -23,7 +23,7 @@ function buildRegex(query: string, opts: HighlightOptions): RegExp | null {
   try {
     return new RegExp(source, opts.caseSensitive ? "g" : "gi");
   } catch {
-    return null; // invalid regex mid-typing — just show 0 matches instead of crashing
+    return null; // invalid regex mid-typing, just show 0 matches instead of crashing
   }
 }
 
@@ -39,10 +39,8 @@ function unwrapMarks(container: HTMLElement) {
   });
 }
 
-// Highlights every match of `query` inside `containerRef`'s rendered text by
-// walking its actual DOM text nodes and wrapping matches in <mark> — this
-// works regardless of CodeView's own syntax-highlighting spans, since it
-// never touches the HTML strings those spans come from, only the live DOM.
+// Walks the actual DOM text nodes and wraps matches in <mark>, so it works
+// regardless of CodeView's syntax-highlighting spans.
 export function useTextHighlight(
   containerRef: RefObject<HTMLElement>,
   query: string,
@@ -73,8 +71,7 @@ export function useTextHighlight(
     }
 
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
-      // Skips CodeView's line-number gutter (data-no-search) so e.g.
-      // searching "1" doesn't match every line-number cell in the margin.
+      // Skip the line-number gutter so searching "1" doesn't match every line number.
       acceptNode: (n) => (n.parentElement?.closest("[data-no-search]") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
     });
     const textNodes: Text[] = [];

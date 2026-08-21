@@ -1,15 +1,11 @@
-// Headless CLI for firing a single request out of a Relay workspace folder —
-// e.g. for a CI gate. Reuses the exact same .relay parsing (storage.rs) and
-// HTTP sending (commands.rs) code the desktop app uses; nothing here is
-// duplicated logic.
+// Headless CLI for firing a single request out of a Relay workspace, for CI.
+// Reuses the same .relay parsing and HTTP sending code as the desktop app.
 //
-// v1 scope, deliberately: no pre/test scripts, no auth block, no path
-// params, no form/urlencoded/multipart bodies. Those all currently live as
-// TypeScript running in the desktop app's webview (pm.ts, useSendRequest.ts)
-// and haven't been ported to Rust yet — see the "Relay Core" discussion this
-// was scoped from. This covers plain GET/POST-with-JSON-or-text-body request
-// running with {{variable}} substitution, which is enough for a first CI
-// smoke-test use case.
+// v1 scope: no pre/test scripts, no auth block, no path params, no
+// form/urlencoded/multipart bodies. Those still only exist as TypeScript in
+// the desktop webview (pm.ts, useSendRequest.ts) and haven't been ported to
+// Rust yet. This handles plain GET/POST with a JSON or text body and
+// {{variable}} substitution, enough for a first CI smoke-test.
 use relay::commands::http_request;
 use relay::git::git_branch_diff;
 use relay::models::HttpRequestPayload;
@@ -48,9 +44,8 @@ fn print_version() {
     println!("relay-cli {}", env!("CARGO_PKG_VERSION"));
 }
 
-// Mirrors substituteVars in src/lib/pm.ts exactly: {{ key }} (optional inner
-// whitespace, key chars are word chars/dot/dash) is replaced when known,
-// left as-is (braces included) when the key isn't in `vars`.
+// Mirrors substituteVars in src/lib/pm.ts: {{ key }} gets replaced when
+// known, left as-is when the key isn't in `vars`.
 fn substitute_vars(input: &str, vars: &HashMap<String, String>) -> String {
     let chars: Vec<char> = input.chars().collect();
     let mut out = String::with_capacity(input.len());
@@ -95,9 +90,8 @@ fn kvrows_into_map(rows: &[Value], out: &mut HashMap<String, String>) {
     }
 }
 
-// Depth-first search for the first HTTP request node whose name contains
-// `needle` (case-insensitive) — same "flatten and match" shape as the
-// Runner's flattenRequests in src/lib/runner.ts, minus tag filtering.
+// Depth-first search for the first HTTP request whose name contains needle
+// (case-insensitive), same shape as the Runner's flattenRequests.
 fn find_request<'a>(nodes: &'a [Value], needle: &str) -> Option<(&'a str, &'a Value)> {
     for node in nodes {
         let kind = node.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -160,10 +154,8 @@ struct CheckItem {
     detail: String,
 }
 
-// Depth-first walk collecting every request node (http + grpc) — used by
-// `check` to count requests and by the assertions/mock-endpoint tallies
-// below. Unlike find_request (single-match search for `run`), this visits
-// everything.
+// Depth-first walk collecting every request node (http + grpc), used by
+// `check`'s counts below. Unlike find_request, this visits everything.
 fn collect_requests<'a>(nodes: &'a [Value], out: &mut Vec<&'a Value>) {
     for node in nodes {
         let kind = node.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -177,14 +169,9 @@ fn collect_requests<'a>(nodes: &'a [Value], out: &mut Vec<&'a Value>) {
     }
 }
 
-// Recursively scans any JSON value for a KVRow-shaped object carrying
-// `"secret": true` with a non-empty `"value"` — the invariant storage.rs's
-// save path is supposed to guarantee never holds in a plain (non-.secret.relay,
-// git-tracked) file, since secret values are meant to live only in the
-// gitignored sidecar. A hit here means that invariant was violated somehow
-// (old data predating the secret split, a manual edit, gitignore added after
-// the file was already tracked, etc) — the actual secret value is sitting in
-// a file `git ls-files` says is tracked.
+// Scans for a KVRow with "secret": true and a non-empty value. storage.rs's
+// save path should never let that land in a tracked, non-.secret.relay file,
+// so a hit here means a real secret ended up in git somehow.
 fn find_leaked_secrets(value: &Value, path: &str, out: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
@@ -278,8 +265,7 @@ fn run_check(dir: &str) -> Vec<CheckItem> {
         detail: format!("{example_count} endpoint{}", if example_count == 1 { "" } else { "s" }),
     });
 
-    // Git checks — best-effort; a workspace with no git repo isn't an error
-    // (git integration is opt-in), just reported as such.
+    // Git checks are best-effort; no repo isn't an error, just reported as such.
     let git_status_out = std::process::Command::new("git").args(["status", "--porcelain"]).current_dir(dir).output();
     match git_status_out {
         Ok(out) if out.status.success() => {
@@ -410,11 +396,8 @@ fn cmd_check(args: &[String]) -> ExitCode {
     }
 }
 
-// --- diff ---------------------------------------------------------------
 // Ports diffRequestData/isBreaking/describeBreaking from src/lib/apiDiff.ts
-// (the exact same engine BranchComparePanel.tsx uses) so relay-cli's
-// breaking-change classification stays identical to what the desktop app
-// shows for the same two refs — not a reimplementation from scratch.
+// so relay-cli's breaking-change classification matches the desktop app.
 
 #[derive(serde::Serialize)]
 struct DiffEntryResult {
@@ -448,7 +431,7 @@ fn is_sensitive_key(key: &str) -> bool {
     ["token", "secret", "password", "apikey", "api_key", "api-key", "auth"].iter().any(|s| k.contains(s))
 }
 
-// KVRow-array diff (query params or headers) — mirrors diffRows in apiDiff.ts.
+// KVRow-array diff (query params or headers), mirrors diffRows in apiDiff.ts.
 fn diff_kvrows(before: &[Value], after: &[Value], label: &str, flag_sensitive: bool) -> (Vec<String>, bool) {
     let mut lines = Vec::new();
     let mut sensitive_hit = false;
@@ -499,12 +482,9 @@ fn json_type_name(v: &Value) -> &'static str {
     }
 }
 
-// Recursively compares two JSON values field-by-field, reporting a line for
-// every leaf whose TYPE changed, was removed, or was newly added — the
-// "response.total_balance: number → string" style check. Only meaningful
-// between two objects; a type change at the root (e.g. object → array) is
-// reported directly. Doesn't descend into arrays (each array is compared as
-// a single "array" type-slot, not element-by-element) — kept simple for v1.
+// Compares two JSON values field-by-field, reporting a line for every leaf
+// whose type changed, was removed, or was added. Doesn't descend into
+// arrays, each one's compared as a single type-slot, kept simple for v1.
 fn diff_json_shape(before: &Value, after: &Value, path: &str, out: &mut Vec<(String, bool)>) {
     match (before, after) {
         (Value::Object(b), Value::Object(a)) => {
@@ -530,9 +510,8 @@ fn diff_json_shape(before: &Value, after: &Value, path: &str, out: &mut Vec<(Str
     }
 }
 
-// Finds the example serving as the default mock scenario (isDefault, or the
-// first one if none is flagged) and returns its parsed `body` if it's a JSON
-// object — the only shape diff_json_shape can meaningfully compare.
+// Finds the default mock example (isDefault, or the first one) and returns
+// its parsed body if it's a JSON object, the only shape diff_json_shape can compare.
 fn default_example_body(request: &Value) -> Option<Value> {
     let examples = request.get("examples").and_then(Value::as_array)?;
     let chosen = examples.iter().find(|e| e.get("isDefault").and_then(Value::as_bool) == Some(true)).or_else(|| examples.first())?;

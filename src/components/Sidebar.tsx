@@ -18,8 +18,7 @@ interface CtxMenuState {
   kind: "folder" | "request" | "grpc";
 }
 
-// Ids in the order they're actually rendered (children of a collapsed folder
-// are skipped) — used to resolve a shift-click range.
+// Rendered order, skipping children of collapsed folders. Used for shift-click ranges.
 function flattenVisible(nodes: TreeNode[]): string[] {
   const out: string[] = [];
   for (const n of nodes) {
@@ -29,10 +28,8 @@ function flattenVisible(nodes: TreeNode[]): string[] {
   return out;
 }
 
-// Returns a pruned copy of the tree containing only nodes matching `query`
-// (case-insensitive) plus the folders needed to reach them, force-expanded so
-// matches are actually visible. A folder whose own name matches keeps all of
-// its contents as-is, rather than filtering inside it too.
+// Pruned tree: only nodes matching query, plus folders needed to reach them,
+// force-expanded. A folder matching by name keeps its whole subtree as-is.
 function filterTree(nodes: TreeNode[], query: string): TreeNode[] {
   const out: TreeNode[] = [];
   for (const n of nodes) {
@@ -119,7 +116,7 @@ export default function Sidebar() {
   dropInfoRef.current = dropInfo;
   selectedIdsRef.current = selectedIds;
 
-  // While dragging one of an active multi-selection, the whole selection moves together.
+  // Dragging one item in an active multi-selection moves the whole group.
   const draggingIds = dragId ? (selectedIds.has(dragId) && selectedIds.size > 1 ? selectedIds : new Set([dragId])) : null;
 
   useEffect(() => {
@@ -214,16 +211,14 @@ export default function Sidebar() {
       setSelectedIds(ai === -1 || bi === -1 ? new Set([nodeId]) : new Set(order.slice(Math.min(ai, bi), Math.max(ai, bi) + 1)));
       return;
     }
-    // Plain mousedown on an already-multi-selected item keeps the group selected
-    // so the drag that may follow moves the whole selection together.
+    // Keep the group selected so a following drag moves it all together.
     setSelectedIds((prev) => (prev.has(nodeId) && prev.size > 1 ? prev : new Set([nodeId])));
     setLastSelectedId(nodeId);
     dragStartRef.current = { nodeId, y: e.clientY };
   };
 
-  // Called from an item's onClick before its default action (open tab / toggle
-  // collapse). Modifier-clicks are selection-only — mousedown already handled
-  // them — so they return false and skip the default action.
+  // Modifier-clicks are selection-only (mousedown already handled them),
+  // so skip the default open/collapse action for those.
   const handleItemClick = (nodeId: string, e: React.MouseEvent): boolean => {
     if (e.metaKey || e.ctrlKey || e.shiftKey) return false;
     setSelectedIds(new Set([nodeId]));
@@ -237,9 +232,8 @@ export default function Sidebar() {
   const handleCtxMenu = (e: React.MouseEvent, node: TreeNode) => {
     e.preventDefault();
     e.stopPropagation();
-    // Right-clicking something outside the active multi-selection starts a
-    // fresh single-item selection; right-clicking a selected item keeps the
-    // whole group selected so the menu can offer bulk actions on it.
+    // Right-click on a non-selected item resets to single selection; on a
+    // selected item, keep the group so the menu can offer bulk actions.
     if (!(selectedIds.has(node.id) && selectedIds.size > 1)) {
       setSelectedIds(new Set([node.id]));
       setLastSelectedId(node.id);

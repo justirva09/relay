@@ -17,11 +17,9 @@ pub struct VersionStatus {
     pub message: String,
 }
 
-/// Fetches a remote kill-switch flag so a build can be remotely disabled
-/// (e.g. once a subscription tier replaces free experimental access).
-/// Any failure (offline, unreachable, bad JSON) is treated as "not blocked"
-/// by the caller — this command errors out rather than guessing, so the
-/// frontend can fail-open explicitly instead of silently.
+/// Fetches a remote kill-switch flag so a build can be disabled remotely.
+/// Any failure (offline, bad JSON) errors out rather than guessing, so the
+/// frontend fails open explicitly instead of silently.
 #[tauri::command]
 pub async fn check_version_status() -> Result<VersionStatus, String> {
     let client = reqwest::Client::builder()

@@ -11,11 +11,9 @@ export interface OAuth2Result {
   expiresAt?: number;
 }
 
-// Runs the full Authorization Code + PKCE flow: opens the user's system
-// browser (Relay itself has no embedded browser view to navigate), catches
-// the redirect via a one-shot local listener (see oauth.rs), then exchanges
-// the code for a token through Rust's http_request — same path all of
-// Relay's real HTTP traffic takes, not a webview fetch().
+// Authorization Code + PKCE flow. Opens the system browser (no embedded
+// browser view here), catches the redirect via a one-shot local listener,
+// then exchanges the code for a token through Rust's http_request.
 export async function runAuthorizationCodePkceFlow(config: OAuth2Config): Promise<OAuth2Result> {
   if (!config.authUrl || !config.tokenUrl || !config.clientId) {
     throw new Error("Authorization URL, Token URL, and Client ID are required");
@@ -35,8 +33,7 @@ export async function runAuthorizationCodePkceFlow(config: OAuth2Config): Promis
   authUrl.searchParams.set("code_challenge", challenge);
   authUrl.searchParams.set("code_challenge_method", "S256");
 
-  // Start listening BEFORE opening the browser — otherwise a fast provider
-  // could redirect back before the local listener is bound to accept it.
+  // listen before opening the browser, a fast provider could redirect back too soon otherwise
   const callbackPromise = oauth2AwaitCallback(config.redirectPort, CALLBACK_TIMEOUT_SECS);
   await open(authUrl.toString());
 
