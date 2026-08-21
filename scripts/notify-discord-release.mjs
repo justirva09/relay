@@ -4,13 +4,16 @@
 // release asset's own browser_download_url only works for someone logged
 // into GitHub with repo access — no good for a public Discord channel. This
 // script re-uploads the same installer files to a public Google Drive
-// folder (via a service account) and posts links to THOSE instead.
+// folder and posts links to THOSE instead.
 //
-// Auth for Drive: a Google Cloud service account, not OAuth2 user consent —
-// there's no human available to click through a consent screen in CI. The
-// service account's own JWT is signed locally (Node's built-in `crypto`
-// covers RS256, no extra dependency needed) and exchanged for an access
-// token via Google's standard OAuth2 token endpoint.
+// Auth for Drive: OAuth2 with a stored refresh token for the folder
+// owner's own Google account — NOT a service account. Service accounts
+// have zero Drive storage quota of their own and can't create files in a
+// regular "My Drive" folder even when shared as Editor (only Workspace
+// Shared Drives support that, which a personal Gmail account doesn't have).
+// Uploading as the actual account owner uses their normal Drive quota
+// instead. The refresh token was minted once, by hand, via Google's OAuth
+// Playground — see the repo's release-notify setup notes for that flow.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -18,7 +21,9 @@ import path from "node:path";
 
 const GITHUB_TOKEN = requireEnv("GITHUB_TOKEN");
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-const GDRIVE_SERVICE_ACCOUNT_JSON = process.env.GDRIVE_SERVICE_ACCOUNT_JSON;
+const GDRIVE_CLIENT_ID = process.env.GDRIVE_CLIENT_ID;
+const GDRIVE_CLIENT_SECRET = process.env.GDRIVE_CLIENT_SECRET;
+const GDRIVE_REFRESH_TOKEN = process.env.GDRIVE_REFRESH_TOKEN;
 const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
 const GITHUB_EVENT_PATH = requireEnv("GITHUB_EVENT_PATH");
 
@@ -63,42 +68,23 @@ async function downloadGitHubAsset(asset, destPath) {
   fs.writeFileSync(destPath, buf);
 }
 
-function base64url(input) {
-  return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-// Google's service-account OAuth2 flow: a signed JWT asserting who we are,
-// exchanged for a short-lived access token. drive.file scope only — this
-// service account can only see/manage files it created (or that were
-// explicitly shared with it, like the target folder), never a user's whole
-// Drive.
+// Standard OAuth2 refresh-token grant — exchanges the long-lived refresh
+// token for a fresh ~1h access token on every run. No JWT signing needed
+// (that's the service-account flow this replaced); this is just a plain
+// token-endpoint POST.
 async function getDriveAccessToken() {
-  const creds = JSON.parse(GDRIVE_SERVICE_ACCOUNT_JSON);
-  const now = Math.floor(Date.now() / 1000);
-  const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const claim = base64url(
-    JSON.stringify({
-      iss: creds.client_email,
-      scope: "https://www.googleapis.com/auth/drive.file",
-      aud: "https://oauth2.googleapis.com/token",
-      iat: now,
-      exp: now + 3600,
-    })
-  );
-  const signInput = `${header}.${claim}`;
-  const signature = crypto.createSign("RSA-SHA256").update(signInput).sign(creds.private_key);
-  const assertion = `${signInput}.${base64url(signature)}`;
-
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion,
+      grant_type: "refresh_token",
+      client_id: GDRIVE_CLIENT_ID,
+      client_secret: GDRIVE_CLIENT_SECRET,
+      refresh_token: GDRIVE_REFRESH_TOKEN,
     }),
   });
   const body = await res.json();
-  if (!res.ok) throw new Error(`Google token exchange failed: ${JSON.stringify(body)}`);
+  if (!res.ok) throw new Error(`Google token refresh failed: ${JSON.stringify(body)}`);
   return body.access_token;
 }
 
@@ -175,7 +161,9 @@ async function postToDiscord(release, links) {
 
 async function main() {
   if (!DISCORD_WEBHOOK_URL) warnAndExit("DISCORD_WEBHOOK_URL secret not set — skipping.");
-  if (!GDRIVE_SERVICE_ACCOUNT_JSON || !GDRIVE_FOLDER_ID) warnAndExit("GDRIVE_SERVICE_ACCOUNT_JSON/GDRIVE_FOLDER_ID secret not set — skipping.");
+  if (!GDRIVE_CLIENT_ID || !GDRIVE_CLIENT_SECRET || !GDRIVE_REFRESH_TOKEN || !GDRIVE_FOLDER_ID) {
+    warnAndExit("GDRIVE_CLIENT_ID/GDRIVE_CLIENT_SECRET/GDRIVE_REFRESH_TOKEN/GDRIVE_FOLDER_ID secret not set — skipping.");
+  }
 
   const event = JSON.parse(fs.readFileSync(GITHUB_EVENT_PATH, "utf8"));
   const release = event.release;
