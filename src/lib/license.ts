@@ -114,9 +114,14 @@ export function isLicenseValid(): boolean {
   return true;
 }
 
-export function hasFeature(id: string): boolean {
-  if (!isLicenseValid()) return false;
-  return state.license!.features.includes(id);
+// Business decision: everything is free for this initial launch — no
+// feature is Pro-gated yet, regardless of what a license/subscription would
+// otherwise say. The licensing/sign-in infrastructure (this whole file,
+// Settings' Account section, the issue-license backend) stays wired up as-is
+// so gating specific features again later is just deleting this early
+// return — not rebuilding the plumbing from scratch.
+export function hasFeature(_id: string): boolean {
+  return true;
 }
 
 function base64UrlDecode(s: string): Uint8Array {

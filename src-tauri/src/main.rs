@@ -1,17 +1,7 @@
 // Prevents an additional console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod commands;
-mod cookie_jar;
-mod git;
-mod grpc;
-mod mock_server;
-mod models;
-mod oauth;
-mod perf;
-mod response_cache;
-mod storage;
-mod version_check;
+use relay::{commands, cookie_jar, git, grpc, mock_server, oauth, perf, response_cache, storage, version_check};
 
 fn main() {
     tauri::Builder::default()

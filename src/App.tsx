@@ -3,8 +3,8 @@ import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import RequestPanel from "./components/RequestPanel";
 import ResponsePanel from "./components/ResponsePanel";
-import GrpcPanel from "./components/GrpcPanel";
-import GrpcResponsePanel from "./components/GrpcResponsePanel";
+import GrpcPanel from "./components/grpc/GrpcPanel";
+import GrpcResponsePanel from "./components/grpc/GrpcResponsePanel";
 import OverviewPage from "./components/OverviewPage";
 import BranchComparePanel from "./components/BranchComparePanel";
 import RunnerPanel from "./components/RunnerPanel";
@@ -156,7 +156,10 @@ const SPLIT_MIN_W = 320;
 const SPLIT_MAX_MARGIN_W = 320;
 const SPLIT_DEFAULT_W = 560;
 
-const SPLIT_MIN_H = 160;
+// Low enough to let the response panel be dragged fully out of the way when
+// you just want the request/Examples editor to have the full height instead
+// — not a hard floor like SPLIT_MAX_MARGIN_H is for the *top* panel.
+const SPLIT_MIN_H = 0;
 const SPLIT_MAX_MARGIN_H = 160;
 const SPLIT_DEFAULT_H = 340;
 
@@ -318,7 +321,13 @@ function Main() {
     return saved >= SPLIT_MIN_W ? saved : SPLIT_DEFAULT_W;
   });
   const [splitHeight, setSplitHeight] = useState<number>(() => {
-    const saved = Number(localStorage.getItem("relay-split-height"));
+    // Number(null) is 0, which — now that SPLIT_MIN_H is itself 0 to allow a
+    // fully collapsed panel — would be indistinguishable from "never saved
+    // anything yet" and silently default to a collapsed panel on first
+    // launch. Check for the raw stored string first.
+    const raw = localStorage.getItem("relay-split-height");
+    if (raw === null) return SPLIT_DEFAULT_H;
+    const saved = Number(raw);
     return saved >= SPLIT_MIN_H ? saved : SPLIT_DEFAULT_H;
   });
   const [resizingWidth, setResizingWidth] = useState(false);
@@ -550,7 +559,7 @@ function Main() {
                   onMouseDown={(e) => { e.preventDefault(); setResizingHeight(true); }}
                   className={`h-1 shrink-0 cursor-row-resize hover:bg-th-accent-border ${resizingHeight ? "bg-th-accent-border" : "bg-th-border"}`}
                 />
-                <div className="shrink-0 min-h-0" style={{ height: splitHeight }}>
+                <div className="shrink-0 min-h-0 overflow-hidden" style={{ height: splitHeight }}>
                   {renderBottomPanel()}
                 </div>
               </>

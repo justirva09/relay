@@ -1,6 +1,6 @@
 import React from "react";
-import { GrpcLogEntry } from "../types";
-import { JsonTree, isJson } from "./JsonTree";
+import { GrpcLogEntry } from "../../types";
+import { JsonTree, isJson } from "../JsonTree";
 
 function DirectionBadge({ direction }: { direction: GrpcLogEntry["direction"] }) {
   if (direction === "sent") {

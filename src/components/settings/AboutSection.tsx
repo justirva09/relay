@@ -6,6 +6,7 @@ import pkg from "../../../package.json";
 import { SectionHeading } from "./shared";
 
 const WEBSITE_URL = "https://relay-landing-page-iota.vercel.app/";
+const DISCORD_URL = "https://discord.gg/RrSQRdPh7a";
 const AUTHOR_URL = "https://www.linkedin.com/in/justirva/";
 
 export function AboutSection() {
@@ -24,9 +25,15 @@ export function AboutSection() {
         <p className="text-[12.5px] text-th-text-2 mt-3 max-w-[320px]">
           Relay helps you build, test, and version-control HTTP and gRPC requests — faster.
         </p>
-        <button onClick={() => open(WEBSITE_URL).catch(() => window.open(WEBSITE_URL, "_blank"))} className="text-[12.5px] text-th-accent-text hover:underline mt-3">
-          Website
-        </button>
+        <div className="flex items-center gap-3 mt-3">
+          <button onClick={() => open(WEBSITE_URL).catch(() => window.open(WEBSITE_URL, "_blank"))} className="text-[12.5px] text-th-accent-text hover:underline">
+            Website
+          </button>
+          <span className="text-th-text-4">·</span>
+          <button onClick={() => open(DISCORD_URL).catch(() => window.open(DISCORD_URL, "_blank"))} className="text-[12.5px] text-th-accent-text hover:underline">
+            Discord
+          </button>
+        </div>
         <span className="text-[11px] text-th-text-4 mt-4">Copyright © 2026 Relay. All rights reserved.</span>
         <button onClick={() => open(AUTHOR_URL).catch(() => window.open(AUTHOR_URL, "_blank"))} className="text-[11px] text-th-text-4 hover:text-th-accent-text hover:underline mt-1">
           Created by Justirva

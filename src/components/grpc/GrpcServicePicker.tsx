@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { GrpcMethodType } from "../types";
+import { GrpcMethodType } from "../../types";
 
 const METHOD_TYPE_LABEL: Record<GrpcMethodType, string> = {
   unary: "unary",

@@ -25,11 +25,48 @@ impl Default for MockServerState {
 struct ResolvedExample {
     status: u16,
     body: String,
+    // Response headers saved on the example itself (ExamplesTab's header
+    // editor) — e.g. overriding Content-Type for a non-JSON mock body, or
+    // adding a custom header a real client would check for.
+    headers: Vec<(String, String)>,
     is_default: bool,
     // The X-Mock-Scenario value that selects this example — the example's
     // own `scenarioKey` if it set one, else a slugified `name`. Resolved
     // once here so `pick_example` just compares strings.
     key: String,
+}
+
+// Hop-by-hop / connection-framing headers that only make sense for the
+// original connection they were captured on — "Save as example" copies a
+// real response's headers verbatim (see App.tsx's onSaveExample), so an
+// example built from a real API's response can easily carry a stale
+// Content-Length or a Transfer-Encoding: chunked that doesn't match what's
+// actually being served now. Forwarding those breaks the response framing
+// at the protocol level (hyper/the client sees a body length that doesn't
+// match what's declared) — axum/hyper must compute these themselves.
+const NON_FORWARDABLE_HEADERS: [&str; 6] = ["content-length", "transfer-encoding", "connection", "keep-alive", "host", "content-encoding"];
+
+// Example.headers is `[string, string][]` on the TS side — parsed
+// leniently (skip any entry that isn't a 2-element string array) rather
+// than failing the whole example on one malformed row.
+fn parse_example_headers(value: &Value) -> Vec<(String, String)> {
+    value
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let pair = row.as_array()?;
+                    let k = pair.first()?.as_str()?.trim();
+                    let v = pair.get(1)?.as_str()?;
+                    if k.is_empty() || NON_FORWARDABLE_HEADERS.contains(&k.to_ascii_lowercase().as_str()) {
+                        None
+                    } else {
+                        Some((k.to_string(), v.to_string()))
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 struct MockRoute {
@@ -139,6 +176,7 @@ fn resolve_examples(examples: &Value, cached_response: Option<&Value>) -> Vec<Re
                 ResolvedExample {
                     status: e.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16,
                     body: e.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    headers: e.get("headers").map(parse_example_headers).unwrap_or_default(),
                     // Same "isDefault flag, else first" fallback as before —
                     // just resolved once here instead of at lookup time.
                     is_default: e.get("isDefault").and_then(|v| v.as_bool()).unwrap_or(false) || (!has_default && i == 0),
@@ -154,6 +192,7 @@ fn resolve_examples(examples: &Value, cached_response: Option<&Value>) -> Vec<Re
         Some(resp) => vec![ResolvedExample {
             status: resp.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16,
             body: resp.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            headers: Vec::new(),
             is_default: true,
             key: "cached-response".to_string(),
         }],
@@ -164,6 +203,7 @@ fn resolve_examples(examples: &Value, cached_response: Option<&Value>) -> Vec<Re
                 "note": "No example yet for this request — send it once and use \"Save as example\" in the response panel."
             })
             .to_string(),
+            headers: Vec::new(),
             is_default: true,
             key: "default".to_string(),
         }],
@@ -207,11 +247,30 @@ fn pick_example<'a>(examples: &'a [ResolvedExample], scenario: Option<&str>) -> 
 }
 
 fn json_response(status: u16, body: String) -> Response {
-    Response::builder()
-        .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
-        .header("content-type", "application/json")
-        .body(Body::from(body))
-        .unwrap()
+    example_response(status, body, &[])
+}
+
+// Same as json_response, but layers an example's own saved headers on top —
+// a header the user set explicitly (e.g. Content-Type: application/xml for
+// a non-JSON mock body) overrides the application/json default rather than
+// being sent alongside a conflicting duplicate.
+fn example_response(status: u16, body: String, headers: &[(String, String)]) -> Response {
+    let mut builder = Response::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
+    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+        builder = builder.header("content-type", "application/json");
+    }
+    for (k, v) in headers {
+        // A captured real-world header value can contain bytes HeaderValue
+        // rejects (control chars, non-ASCII) — .header() silently records
+        // the error internally rather than panicking immediately, but
+        // .body() below would panic on it. Validate up front and just skip
+        // that one header instead of taking down the whole response (and,
+        // via the connection abruptly closing, the caller's request).
+        if axum::http::HeaderName::from_bytes(k.as_bytes()).is_ok() && axum::http::HeaderValue::from_str(v).is_ok() {
+            builder = builder.header(k, v);
+        }
+    }
+    builder.body(Body::from(body)).unwrap()
 }
 
 struct MockContext {
@@ -250,7 +309,7 @@ async fn fallback_handler(State(ctx): State<Arc<MockContext>>, req: axum::extrac
     for route in routes.iter() {
         if route.method == method && path_matches(&route.path_template, &path) {
             return match pick_example(&route.examples, scenario.as_deref()) {
-                Ok(example) => json_response(example.status, example.body.clone()),
+                Ok(example) => example_response(example.status, example.body.clone(), &example.headers),
                 Err(available) => json_response(
                     404,
                     serde_json::json!({
@@ -446,5 +505,73 @@ mod tests {
     fn blank_scenario_key_falls_back_to_slugified_name() {
         let examples = resolve_examples(&serde_json::json!([{ "name": "New Example", "status": 200, "body": "ok", "scenarioKey": "  " }]), None);
         assert_eq!(examples[0].key, "new-example");
+    }
+
+    #[test]
+    fn parse_example_headers_skips_malformed_rows() {
+        let headers = parse_example_headers(&serde_json::json!([
+            ["X-Custom", "yes"],
+            ["", "should be skipped: empty key"],
+            ["only-one-element"],
+            "not even an array",
+            ["X-Other", "value"],
+        ]));
+        assert_eq!(headers, vec![("X-Custom".to_string(), "yes".to_string()), ("X-Other".to_string(), "value".to_string())]);
+    }
+
+    #[test]
+    fn parse_example_headers_drops_hop_by_hop_headers() {
+        // A real "Save as example" capture carries these straight from the
+        // live response — replaying a stale Content-Length/Transfer-Encoding
+        // against a differently-sized mock body breaks the response framing
+        // at the protocol level (this was a real bug: the mock server showed
+        // "Running" but every request failed with a client-side connection
+        // error, not an HTTP error).
+        let headers = parse_example_headers(&serde_json::json!([
+            ["Content-Length", "1234"],
+            ["Transfer-Encoding", "chunked"],
+            ["Connection", "keep-alive"],
+            ["X-Real-Header", "kept"],
+        ]));
+        assert_eq!(headers, vec![("X-Real-Header".to_string(), "kept".to_string())]);
+    }
+
+    #[test]
+    fn resolve_examples_parses_the_headers_field() {
+        let examples = resolve_examples(
+            &serde_json::json!([{ "name": "a", "status": 200, "body": "ok", "headers": [["X-Custom", "yes"]] }]),
+            None,
+        );
+        assert_eq!(examples[0].headers, vec![("X-Custom".to_string(), "yes".to_string())]);
+    }
+
+    fn header_value<'a>(resp: &'a Response, name: &str) -> Option<&'a str> {
+        resp.headers().get(name).and_then(|v| v.to_str().ok())
+    }
+
+    #[test]
+    fn example_response_sends_custom_headers_and_defaults_content_type_to_json() {
+        let resp = example_response(200, "{}".to_string(), &[("X-Custom".to_string(), "yes".to_string())]);
+        assert_eq!(header_value(&resp, "x-custom"), Some("yes"));
+        assert_eq!(header_value(&resp, "content-type"), Some("application/json"));
+    }
+
+    #[test]
+    fn example_response_custom_content_type_overrides_the_json_default() {
+        let resp = example_response(200, "<a/>".to_string(), &[("Content-Type".to_string(), "application/xml".to_string())]);
+        assert_eq!(header_value(&resp, "content-type"), Some("application/xml"));
+        // Exactly one content-type header — not the custom one alongside a
+        // leftover "application/json" default.
+        assert_eq!(resp.headers().get_all("content-type").iter().count(), 1);
+    }
+
+    #[test]
+    fn example_response_skips_an_invalid_header_value_instead_of_panicking() {
+        // A header value with a raw newline/control char is invalid for
+        // HeaderValue — must be dropped, not crash the whole response (and
+        // the connection along with it).
+        let resp = example_response(200, "{}".to_string(), &[("X-Bad".to_string(), "line1\nline2".to_string()), ("X-Good".to_string(), "fine".to_string())]);
+        assert_eq!(header_value(&resp, "x-bad"), None);
+        assert_eq!(header_value(&resp, "x-good"), Some("fine"));
     }
 }

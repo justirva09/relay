@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { GrpcLogEntry, GrpcResponseSummary } from "../types";
-import CodeView from "./CodeView";
+import { GrpcLogEntry, GrpcResponseSummary } from "../../types";
+import CodeView from "../CodeView";
 import GrpcResponseLog from "./GrpcResponseLog";
 
 function bytesToSize(bytes: number) {

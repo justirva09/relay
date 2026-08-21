@@ -17,6 +17,82 @@ interface Props {
   variables?: VariableGroup[];
   variableInfo?: VariableInfo;
   lockedKeys?: string[];
+  // Autocomplete for the Name column — only meaningful for actual HTTP
+  // headers (Authorization, Content-Type, Relay's own X-Mock-Scenario, ...).
+  // Omitted for query params/urlencoded/gRPC metadata, which stay plain
+  // free-text input.
+  keySuggestions?: string[];
+}
+
+// Plain free-text input with a filtered, click-or-Enter-to-pick suggestion
+// list — deliberately simpler than ValueInput's {{variable}} autocomplete
+// above (no cursor-position token matching needed, a header name is the
+// whole field). Portals the dropdown like ValueInput's does, for the same
+// reason: KeyValueEditor's table sits inside an overflow-x-auto wrapper
+// elsewhere, which clips anything positioned via plain absolute/relative.
+function KeyNameInput({
+  value,
+  onChange,
+  placeholder,
+  suggestions,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  suggestions: string[];
+  disabled?: boolean;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const filtered = value.trim() ? suggestions.filter((s) => s.toLowerCase().includes(value.trim().toLowerCase()) && s.toLowerCase() !== value.trim().toLowerCase()) : suggestions;
+
+  const select = (name: string) => {
+    onChange(name);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <input
+        value={value}
+        disabled={disabled}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); setActiveIndex(0); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (!open || filtered.length === 0) return;
+          if (e.key === "ArrowDown") { e.preventDefault(); setActiveIndex((i) => (i + 1) % filtered.length); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIndex((i) => (i - 1 + filtered.length) % filtered.length); }
+          else if (e.key === "Enter" || e.key === "Tab") { if (filtered[activeIndex]) { e.preventDefault(); select(filtered[activeIndex]); } }
+          else if (e.key === "Escape") { setOpen(false); }
+        }}
+        placeholder={placeholder}
+        className="w-full min-w-0 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus disabled:cursor-not-allowed"
+      />
+      {open && filtered.length > 0 && (
+        <AnchorPortal anchorRef={wrapRef}>
+          <div
+            className="absolute z-50 min-w-[180px] max-w-[280px] max-h-[280px] overflow-y-auto bg-th-elevated border border-th-border rounded-md shadow-xl py-1 font-mono text-[12px]"
+            style={{ top: "100%", left: 0, marginTop: "4px" }}
+          >
+            {filtered.map((name, i) => (
+              <button
+                key={name}
+                onMouseDown={(e) => { e.preventDefault(); select(name); }}
+                onMouseEnter={() => setActiveIndex(i)}
+                className={`w-full text-left px-2.5 py-1 truncate text-th-text-1 ${i === activeIndex ? "bg-th-hover" : ""}`}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        </AnchorPortal>
+      )}
+    </div>
+  );
 }
 
 export function ValueInput({ value, onChange, placeholder, variables, variableInfo, disabled }: {
@@ -134,7 +210,7 @@ function parseBulk(text: string): KVRow[] {
   return rows.length ? rows : [newRow()];
 }
 
-export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, placeholderVal, showToggle = true, variables, variableInfo, lockedKeys }: Props) {
+export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, placeholderVal, showToggle = true, variables, variableInfo, lockedKeys, keySuggestions }: Props) {
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkText, setBulkText] = useState("");
 
@@ -223,13 +299,23 @@ export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, pla
                         </td>
                       )}
                       <td className="px-2 py-1.5 align-middle">
-                        <input
-                          value={r.key}
-                          disabled={locked}
-                          onChange={(e) => update(r.id, "key", e.target.value)}
-                          placeholder={placeholderKey}
-                          className="w-full min-w-0 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus disabled:cursor-not-allowed"
-                        />
+                        {keySuggestions ? (
+                          <KeyNameInput
+                            value={r.key}
+                            disabled={locked}
+                            onChange={(v) => update(r.id, "key", v)}
+                            placeholder={placeholderKey}
+                            suggestions={keySuggestions}
+                          />
+                        ) : (
+                          <input
+                            value={r.key}
+                            disabled={locked}
+                            onChange={(e) => update(r.id, "key", e.target.value)}
+                            placeholder={placeholderKey}
+                            className="w-full min-w-0 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus disabled:cursor-not-allowed"
+                          />
+                        )}
                       </td>
                       <td className="px-2 py-1.5 align-middle">
                         <ValueInput

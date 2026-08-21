@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-import { GrpcRequestData, GrpcMethodType, defaultMessageForMethodType } from "../types";
-import { MOCK_GRPC_SERVICES } from "../lib/grpcMock";
-import { listGrpcServices, listGrpcServicesFromProto, listProtoServiceFiles, fetchGrpcMethodSchema, GrpcCatalogService, ProtoFieldSchema } from "../lib/grpcClient";
-import CodeEditor from "./CodeEditor";
-import KeyValueEditor from "./KeyValueEditor";
+import { GrpcRequestData, GrpcMethodType, defaultMessageForMethodType } from "../../types";
+import { MOCK_GRPC_SERVICES } from "../../lib/grpcMock";
+import { listGrpcServices, listGrpcServicesFromProto, listProtoServiceFiles, fetchGrpcMethodSchema, GrpcCatalogService, ProtoFieldSchema } from "../../lib/grpcClient";
+import CodeEditor from "../CodeEditor";
+import KeyValueEditor from "../KeyValueEditor";
 import GrpcServicePicker from "./GrpcServicePicker";
-import FloatingMenu from "./FloatingMenu";
+import FloatingMenu from "../FloatingMenu";
 
 function indent(text: string): string {
   return text

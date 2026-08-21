@@ -3,6 +3,7 @@ name = "relay"
 version = "0.2.0"
 description = "Lightweight HTTP client"
 edition = "2021"
+default-run = "relay"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

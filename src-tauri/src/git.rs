@@ -275,16 +275,39 @@ pub fn git_branch_diff(dir: String, base: String, compare: Option<String>, inclu
     let mut removed_paths = Vec::new();
     let mut modified_paths = Vec::new();
     for line in raw.lines() {
-        let mut parts = line.splitn(2, '\t');
-        let status = parts.next().unwrap_or("");
-        let p = parts.next().unwrap_or("");
-        if p.is_empty() || !is_request_file(p) {
-            continue;
-        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        let status = parts.first().copied().unwrap_or("");
         match status.chars().next() {
-            Some('A') => added_paths.push(p.to_string()),
-            Some('D') => removed_paths.push(p.to_string()),
-            Some('M') => modified_paths.push(p.to_string()),
+            Some('A') => {
+                if let Some(p) = parts.get(1).copied().filter(|p| is_request_file(p)) {
+                    added_paths.push(p.to_string());
+                }
+            }
+            Some('D') => {
+                if let Some(p) = parts.get(1).copied().filter(|p| is_request_file(p)) {
+                    removed_paths.push(p.to_string());
+                }
+            }
+            Some('M') => {
+                if let Some(p) = parts.get(1).copied().filter(|p| is_request_file(p)) {
+                    modified_paths.push(p.to_string());
+                }
+            }
+            // Rename/copy lines are 3 fields (STATUS, old-path, new-path) — git's
+            // own similarity heuristic reports these instead of a plain D+A pair
+            // whenever two .relay files happen to look alike (small JSON files
+            // sharing most of their boilerplate trigger this easily). Feed both
+            // sides into removed/added so the existing node-id reconciliation
+            // below still recognizes "same request, moved" as one modified entry
+            // instead of silently dropping both paths (neither A nor D matched).
+            Some('R') | Some('C') => {
+                if let Some(old_p) = parts.get(1).copied().filter(|p| is_request_file(p)) {
+                    removed_paths.push(old_p.to_string());
+                }
+                if let Some(new_p) = parts.get(2).copied().filter(|p| is_request_file(p)) {
+                    added_paths.push(new_p.to_string());
+                }
+            }
             _ => {}
         }
     }
@@ -669,6 +692,83 @@ mod tests {
         assert_eq!(added.status, "added");
         assert!(added.before.is_none());
         assert!(added.after.is_some());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn branch_diff_treats_an_unrelated_swap_as_remove_plus_add_not_a_dropped_rename() {
+        // Regression test: two real Relay request files share almost all of
+        // their JSON boilerplate (bodyForm/bodyUrlencoded/settings/etc are
+        // near-identical across any two requests) — deleting one and adding
+        // a completely unrelated one in the same commit crosses git's default
+        // rename-similarity threshold, so `git diff --name-status` reports a
+        // single `R061 old new` line instead of separate `D`/`A` lines. The
+        // parser used to only match on the first char of A/D/M, so an R line
+        // matched none of them and BOTH paths silently vanished from the
+        // diff — a real request swap showed as "no changes" in Compare
+        // Branches. Deliberately does NOT use checkout_new_branch/two refs
+        // (see branch_diff_matches_a_rename_across_branches_as_modified
+        // above) — this exercises the base-vs-working-tree (`compare: None`)
+        // path, which is where this was actually observed.
+        let dir = tmp_repo("branch-diff-unrelated-swap");
+        init_hidden_relay(&dir);
+        // Pretty-printed, one-field-per-line — matches storage.rs's actual
+        // on-disk format (serde_json::to_string_pretty), which is what makes
+        // two otherwise-unrelated requests byte-similar enough to cross
+        // git's rename threshold in practice; a minified single-line version
+        // of this same JSON does NOT reproduce the bug.
+        let boilerplate = |id: &str, method: &str, url: &str| {
+            format!(
+                r#"{{
+  "id": "{id}",
+  "kind": "request",
+  "name": "n",
+  "request": {{
+    "method": "{method}",
+    "url": "{url}",
+    "description": "",
+    "params": [],
+    "pathParams": [],
+    "headers": [],
+    "auth": {{
+      "type": "none"
+    }},
+    "bodyMode": "none",
+    "bodyText": "",
+    "bodyForm": [],
+    "bodyUrlencoded": [],
+    "preScript": "",
+    "testScript": "",
+    "examples": [],
+    "tags": [],
+    "settings": {{
+      "encodeUrl": true,
+      "followRedirects": true,
+      "maxRedirects": 5,
+      "timeoutMs": 0
+    }}
+  }}
+}}"#
+            )
+        };
+        fs::write(dir.join(".relay").join("old-name.relay"), boilerplate("old-id", "GET", "/legacy/thing")).unwrap();
+        git_commit(dir.to_string_lossy().to_string(), "base".to_string()).unwrap();
+
+        fs::remove_file(dir.join(".relay").join("old-name.relay")).unwrap();
+        fs::write(dir.join(".relay").join("new-name.relay"), boilerplate("new-id", "POST", "/transactions/bulk")).unwrap();
+        git_commit(dir.to_string_lossy().to_string(), "swap".to_string()).unwrap();
+
+        // Sanity check this scenario really does trigger git's own rename
+        // detection (i.e. this test would have caught the bug) rather than
+        // happening to land on a code path that was never affected.
+        let raw = run_git(&dir, &["diff", "--name-status", "HEAD~1", "--", ".relay"]).unwrap();
+        assert!(raw.starts_with('R'), "test setup didn't trigger a rename line, got: {raw}");
+
+        let diff = git_branch_diff(dir.to_string_lossy().to_string(), "HEAD~1".to_string(), None, false).unwrap();
+        assert_eq!(diff.len(), 2, "must see both the removal and the addition, not zero entries");
+        assert!(diff.iter().any(|e| e.status == "removed" && e.path.contains("old-name")));
+        assert!(diff.iter().any(|e| e.status == "added" && e.path.contains("new-name")));
 
         fs::remove_dir_all(&dir).ok();
     }

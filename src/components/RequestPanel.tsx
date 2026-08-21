@@ -23,6 +23,7 @@ import MethodDropdown from "./requestPanel/MethodDropdown";
 import AutoHeadersList from "./requestPanel/AutoHeadersList";
 import ExamplesTab from "./requestPanel/ExamplesTab";
 import { METHOD_COLOR } from "./requestPanel/shared";
+import { COMMON_HTTP_HEADERS } from "../lib/httpHeaders";
 
 const PRE_PLACEHOLDER = `// runs before the request is sent
 // pm.environment.set("token", "abc123")
@@ -484,6 +485,7 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
               placeholderVal="value"
               variables={variableGroups}
               variableInfo={variableInfo}
+              keySuggestions={COMMON_HTTP_HEADERS}
               lockedKeys={draft.auth.type !== "none" ? ["authorization"] : undefined}
             />
           </>
@@ -538,7 +540,7 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
                   onChange={(v) => onChange({ bodyText: v })}
                   placeholder={draft.bodyMode === "json" ? '{\n  "key": "value",\n  "token": "{{token}}"\n}' : "raw text body"}
                   variables={variableGroups}
-                  className="h-40 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
+                  className="h-64 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
                 />
               </div>
             )}

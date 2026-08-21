@@ -1,7 +1,23 @@
 import { useState } from "react";
-import { Example, KVRow, uid } from "../../types";
+import { Example, KVRow, newRow, uid } from "../../types";
 import { runTestScriptAgainstExample } from "../../lib/useSendRequest";
 import CodeEditor from "../CodeEditor";
+import KeyValueEditor from "../KeyValueEditor";
+import { COMMON_HTTP_HEADERS } from "../../lib/httpHeaders";
+
+// Example.headers is a plain [string, string][] (matching ResponseState —
+// "Save as example" copies a real response's headers straight in), but the
+// editor works in KVRow[] — converted at the boundary rather than changing
+// Example's own shape, which several other places (mock_server.rs, the
+// save-as-example flow) already depend on.
+function headersToRows(headers: [string, string][]): KVRow[] {
+  const rows = headers.map(([key, value]) => ({ ...newRow(), key, value }));
+  return rows.length ? rows : [newRow()];
+}
+
+function rowsToHeaders(rows: KVRow[]): [string, string][] {
+  return rows.filter((r) => r.enabled && r.key.trim()).map((r) => [r.key.trim(), r.value] as [string, string]);
+}
 
 function statusColor(status: number): string {
   if (status >= 500) return "text-rose-400 bg-rose-400/10 ring-rose-400/30";
@@ -148,6 +164,9 @@ export default function ExamplesTab({ examples, onChange, testScript, variables,
   const setScenarioKey = (id: string, scenarioKey: string) => {
     onChange(examples.map((e) => (e.id === id ? { ...e, scenarioKey: scenarioKey.trim() || undefined } : e)));
   };
+  const setHeaderRows = (id: string, rows: KVRow[]) => {
+    onChange(examples.map((e) => (e.id === id ? { ...e, headers: rowsToHeaders(rows) } : e)));
+  };
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2">
@@ -282,7 +301,16 @@ export default function ExamplesTab({ examples, onChange, testScript, variables,
                 value={ex.body}
                 onChange={(v) => setBody(ex.id, v)}
                 placeholder='{\n  "key": "value"\n}'
-                className="h-40 bg-th-bg border border-th-border-input rounded-md focus-within:border-th-border-focus"
+                className="h-64 bg-th-bg border border-th-border-input rounded-md focus-within:border-th-border-focus"
+              />
+              <p className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mt-1">Response Headers</p>
+              <KeyValueEditor
+                rows={headersToRows(ex.headers)}
+                onChangeRows={(rows) => setHeaderRows(ex.id, rows)}
+                placeholderKey="header"
+                placeholderVal="value"
+                showToggle
+                keySuggestions={COMMON_HTTP_HEADERS}
               />
             </div>
           )}

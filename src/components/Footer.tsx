@@ -18,7 +18,7 @@ export default function Footer() {
 
   return (
     <>
-      <div className="h-6 shrink-0 flex items-center justify-between px-3 border-t border-th-border bg-th-bg text-[11px] font-mono text-th-text-4">
+      <div className="h-6 shrink-0 flex items-center justify-between px-3 border-t border-th-border bg-th-sidebar text-[11px] font-mono text-th-text-4">
         <span>v{version || "—"}</span>
         <button
           onClick={() => setDevToolsOpen(!devToolsOpen)}
