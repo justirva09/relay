@@ -6,6 +6,7 @@ name = "relay"
 version = "0.2.0"
 description = "Lightweight HTTP client"
 edition = "2021"
+license = "MIT"
 default-run = "relay"
 
 [build-dependencies]

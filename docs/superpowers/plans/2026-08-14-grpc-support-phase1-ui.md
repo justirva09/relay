@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - This project is **not a git repository** (verified via `git status` → "Not a git repository"). Skip every git commit step below — tasks end after verification, nothing is committed.
-- **No test framework exists** (no jest/vitest in `package.json`, no Rust `#[test]` modules). Verification for every task is `npx tsc --noEmit` followed by `npx vite build`, both run from `/Users/muhammadirva/Downloads/Lite Postman Tauri`. The final task adds a manual interaction checklist since there is no automated UI test harness.
+- **No test framework exists** (no jest/vitest in `package.json`, no Rust `#[test]` modules). Verification for every task is `npx tsc --noEmit` followed by `npx vite build`, run from the repo root. The final task adds a manual interaction checklist since there is no automated UI test harness.
 - Use only the existing Tailwind `th-*` design tokens (`bg-th-surface`, `text-th-text-1`, `border-th-border-input`, etc.) for any new UI — never hardcoded hex colors or bare Tailwind slate/gray classes, to stay consistent with the dark/light theme system already built.
 - Reuse existing components instead of duplicating logic: `CodeEditor` (JSON editor with syntax highlighting) for the message body, `KeyValueEditor` for metadata, and the JSON tree renderer extracted in Task 1 for response display.
 - Phase 1 makes **no Rust changes** and **no new npm dependencies**. Everything is mocked in TypeScript.
@@ -185,7 +185,7 @@ Everything from `export default function ResponsePanel(...)` onward (the rest of
 
 - [ ] **Step 3: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit && npx vite build`
+Run: `npx tsc --noEmit && npx vite build`
 Expected: both succeed with no errors. `ResponsePanel.tsx` should render identically to before (pure refactor, no behavior change) — confirm by starting the app and opening any existing HTTP request's JSON response.
 
 ---
@@ -459,7 +459,7 @@ export function demoWorkspace(): Workspace {
 
 - [ ] **Step 2: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit`
+Run: `npx tsc --noEmit`
 Expected: **FAILS** at this point — `store.tsx`, `Sidebar.tsx`, `TabBar.tsx`, `App.tsx` all reference the now-changed `TabState`/`TreeNode` shapes and will show type errors (e.g. `Property 'method' does not exist on type 'RequestData | GrpcRequestData'`, `Property 'draft' does not exist on type 'HttpTabState | GrpcTabState'` where not narrowed). This is expected — those errors get fixed in Tasks 4, 9, 10, 11. Confirm the errors are ONLY in those four files (not in `postman.ts`, `useSendRequest.ts`, `pm.ts`, `RequestPanel.tsx`, `ResponsePanel.tsx`, `KeyValueEditor.tsx`, `CodeEditor.tsx`, `EnvironmentModal.tsx`) — those files only ever handle `kind === "request"`/`RequestData` shapes directly and must show zero new errors, since the spec's whole rationale for a separate `"grpc"` kind was to avoid touching them.
 
 ---
@@ -598,7 +598,7 @@ export async function simulateGrpcCall(
 
 - [ ] **Step 2: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit`
+Run: `npx tsc --noEmit`
 Expected: no NEW errors introduced by this file itself (the pre-existing Task 2 errors in `store.tsx`/`Sidebar.tsx`/`TabBar.tsx`/`App.tsx` are still expected at this point).
 
 ---
@@ -762,7 +762,7 @@ In the `value = useMemo<Ctx>(...)` block, add `addGrpcRequest,` right after `add
 
 - [ ] **Step 11: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit`
+Run: `npx tsc --noEmit`
 Expected: `store.tsx` itself now compiles clean. Errors should remain only in `Sidebar.tsx`, `TabBar.tsx`, `App.tsx` (fixed in later tasks).
 
 ---
@@ -900,7 +900,7 @@ Replace the existing `handleExport` function with:
 
 - [ ] **Step 4: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit && npx vite build`
+Run: `npx tsc --noEmit && npx vite build`
 Expected: both succeed. Manually verify: create a gRPC request (once Task 11 is done — if running tasks in order, come back to re-check this after Task 11), export the collection from Settings, confirm the status message reports the skipped count and the written JSON file contains no `"grpc"`-kind data.
 
 ---
@@ -986,7 +986,7 @@ export default function GrpcServicePicker({ services, selectedService, selectedM
 
 - [ ] **Step 2: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit`
+Run: `npx tsc --noEmit`
 Expected: no new errors (this component isn't imported anywhere yet, so it only needs to type-check standalone).
 
 ---
@@ -1065,7 +1065,7 @@ export default function GrpcResponseLog({ log, streaming }: { log: GrpcLogEntry[
 
 - [ ] **Step 2: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit`
+Run: `npx tsc --noEmit`
 Expected: no new errors.
 
 ---
@@ -1225,7 +1225,7 @@ Note: the Settings tab's proto-source toggle only stores the preference in Phase
 
 - [ ] **Step 2: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit`
+Run: `npx tsc --noEmit`
 Expected: no new errors.
 
 ---
@@ -1270,7 +1270,7 @@ Nothing else in `TabBar.tsx` changes — `tab.nodeId`, `tab.dirty` are common fi
 
 - [ ] **Step 2: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit`
+Run: `npx tsc --noEmit`
 Expected: `TabBar.tsx` now compiles clean. Remaining errors only in `App.tsx`, `Sidebar.tsx`.
 
 ---
@@ -1422,7 +1422,7 @@ The resize drag logic (`resizingWidth`/`resizingHeight`/`splitWidth`/`splitHeigh
 
 - [ ] **Step 2: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit`
+Run: `npx tsc --noEmit`
 Expected: `App.tsx` now compiles clean. Remaining errors only in `Sidebar.tsx`.
 
 ---
@@ -1743,7 +1743,7 @@ with:
 
 - [ ] **Step 9: Verify**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit && npx vite build`
+Run: `npx tsc --noEmit && npx vite build`
 Expected: both succeed with **zero** errors anywhere in the project — this was the last file with pending errors from Task 2.
 
 ---
@@ -1754,7 +1754,7 @@ Expected: both succeed with **zero** errors anywhere in the project — this was
 
 - [ ] **Step 1: Full type-check and build**
 
-Run: `cd "/Users/muhammadirva/Downloads/Lite Postman Tauri" && npx tsc --noEmit && npx vite build`
+Run: `npx tsc --noEmit && npx vite build`
 Expected: clean pass, no errors or warnings.
 
 - [ ] **Step 2: Manual smoke test**

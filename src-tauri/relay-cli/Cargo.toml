@@ -3,6 +3,7 @@ name = "relay-cli"
 version = "0.2.0"
 description = "Headless CLI for Relay workspaces — reuses the desktop app's own Rust core"
 edition = "2021"
+license = "MIT"
 
 [[bin]]
 name = "relay-cli"
