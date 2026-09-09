@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
-import { TreeNode } from "../types";
+import { GrpcRequestNode, TreeNode } from "../types";
 import { useWorkspace } from "../store";
 import GitPanel from "./GitPanel";
 import CurlImportModal from "./CurlImportModal";
 import GrpcReflectionImportModal from "./grpc/GrpcReflectionImportModal";
+import GrpcMethodInfoModal from "./grpc/GrpcMethodInfoModal";
 import { registerAction, setActiveSearchRegion } from "../lib/keybindings";
 import { useLayout } from "../lib/layout";
 import { TreeItem } from "./sidebar/TreeItem";
@@ -59,6 +60,7 @@ export default function Sidebar() {
   const [triggerEditId, setTriggerEditId] = useState<string | null>(null);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
   const [grpcImportTarget, setGrpcImportTarget] = useState<{ parentId: string | null } | null>(null);
+  const [grpcInfoNode, setGrpcInfoNode] = useState<GrpcRequestNode | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -363,7 +365,7 @@ export default function Sidebar() {
           </div>
         )}
         {displayTree.map((n) => (
-          <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteIds([id])} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={handleItemMouseDown} onItemClick={handleItemClick} onAddFromCurl={openCurlImport} onImportGrpc={(parentId) => setGrpcImportTarget({ parentId })} />
+          <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteIds([id])} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={handleItemMouseDown} onItemClick={handleItemClick} onAddFromCurl={openCurlImport} onImportGrpc={(parentId) => setGrpcImportTarget({ parentId })} onInspectGrpc={setGrpcInfoNode} />
         ))}
       </div>
 
@@ -545,6 +547,8 @@ export default function Sidebar() {
           }}
         />
       )}
+
+      {grpcInfoNode && <GrpcMethodInfoModal request={grpcInfoNode.request} onClose={() => setGrpcInfoNode(null)} />}
 
       <div
         onMouseDown={(e) => { e.preventDefault(); setResizing(true); }}

@@ -56,6 +56,7 @@ export interface ProtoFieldSchema {
   kind: "string" | "number" | "bool" | "enum" | "message" | "map";
   typeName: string;
   repeated: boolean;
+  required: boolean;
   oneof?: string;
   fields?: ProtoFieldSchema[];
   enumValues?: string[];
@@ -65,6 +66,9 @@ export interface ProtoFieldSchema {
 export interface GrpcMethodSchema {
   template: string;
   fields: ProtoFieldSchema[];
+  inputType: string;
+  outputType: string;
+  outputFields: ProtoFieldSchema[];
 }
 
 export function fetchGrpcMethodSchema(params: {

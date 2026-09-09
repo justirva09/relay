@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { GrpcMethodType, TreeNode } from "../../types";
+import { GrpcMethodType, GrpcRequestNode, TreeNode } from "../../types";
 import { useWorkspace } from "../../store";
 import { AddRequestDropdown } from "./AddRequestDropdown";
 import { METHOD_COLOR, DropInfo, getSuppressNextClick } from "./shared";
@@ -23,7 +23,7 @@ const GRPC_METHOD_BADGE: Record<GrpcMethodType, { icon: string; color: string; l
   bidi: { icon: "↕", color: "text-violet-400", label: "Bidirectional streaming" },
 };
 
-export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onDelete, draggingIds, dropInfo, selectedIds, onItemMouseDown, onItemClick, onAddFromCurl, onImportGrpc }: {
+export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onDelete, draggingIds, dropInfo, selectedIds, onItemMouseDown, onItemClick, onAddFromCurl, onImportGrpc, onInspectGrpc }: {
   node: TreeNode;
   depth: number;
   onCtxMenu: (e: React.MouseEvent, node: TreeNode) => void;
@@ -37,6 +37,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
   onItemClick: (nodeId: string, e: React.MouseEvent) => boolean;
   onAddFromCurl: (parentId: string) => void;
   onImportGrpc: (parentId: string) => void;
+  onInspectGrpc: (node: GrpcRequestNode) => void;
 }) {
   const { addFolder, addRequest, addGrpcRequest, renameNode, toggleCollapse, openTab, activeTabId, tabs } = useWorkspace();
   const [editing, setEditing] = useState(false);
@@ -145,7 +146,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
               </div>
             )}
             {node.children.map((c) => (
-              <TreeItem key={c.id} node={c} depth={depth + 1} onCtxMenu={onCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={clearTriggerEdit} onDelete={onDelete} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={onItemMouseDown} onItemClick={onItemClick} onAddFromCurl={onAddFromCurl} onImportGrpc={onImportGrpc} />
+              <TreeItem key={c.id} node={c} depth={depth + 1} onCtxMenu={onCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={clearTriggerEdit} onDelete={onDelete} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={onItemMouseDown} onItemClick={onItemClick} onAddFromCurl={onAddFromCurl} onImportGrpc={onImportGrpc} onInspectGrpc={onInspectGrpc} />
             ))}
           </div>
         )}
@@ -207,6 +208,16 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
           </span>
         )}
         {isDirty && <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />}
+        {hover && !editing && (
+          <button
+            title="Method info"
+            aria-label={`Inspect ${node.name}`}
+            onClick={(e) => { e.stopPropagation(); onInspectGrpc(node); }}
+            className="h-5 w-5 grid place-items-center rounded font-mono text-[11px] text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg shrink-0"
+          >
+            i
+          </button>
+        )}
         {hover && !editing && (
           <button
             title="Delete"
