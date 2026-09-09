@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { GrpcRequestData, GrpcMethodType, defaultGrpcRequestSettings, defaultMessageForMethodType } from "../../types";
 import { MOCK_GRPC_SERVICES } from "../../lib/grpcMock";
 import { listGrpcServices, listGrpcServicesFromProto, listProtoServiceFiles, fetchGrpcMethodSchema, GrpcCatalogService, ProtoFieldSchema } from "../../lib/grpcClient";
@@ -6,6 +6,11 @@ import ResizableCodeEditor from "../ResizableCodeEditor";
 import KeyValueEditor from "../KeyValueEditor";
 import GrpcServicePicker from "./GrpcServicePicker";
 import FloatingMenu from "../FloatingMenu";
+import { useWorkspace } from "../../store";
+import { substituteVars, workspaceVariableValues } from "../../lib/pm";
+import { VariableGroup } from "../../lib/useVariableMenu";
+import { buildVariableInfo } from "../../lib/useVariableHover";
+import UrlInput from "../requestPanel/UrlInput";
 import ToggleSwitch from "../ToggleSwitch";
 
 function indent(text: string): string {
@@ -269,6 +274,20 @@ function randomGrpcSampleSeed(): number {
 }
 
 export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel, protoFiles, onImportProto, onRemoveProto }: Props) {
+  const { workspace } = useWorkspace();
+  const variableGroups = useMemo(() => {
+    const groups: VariableGroup[] = [];
+    const globalNames = workspace.variables.filter((variable) => variable.key.trim()).map((variable) => variable.key);
+    if (globalNames.length) groups.push({ category: "Global", names: globalNames });
+    for (const environment of workspace.environments) {
+      const names = environment.variables.filter((variable) => variable.key.trim()).map((variable) => variable.key);
+      if (names.length) groups.push({ category: environment.name, names });
+    }
+    return groups;
+  }, [workspace.variables, workspace.environments]);
+  const variableInfo = useMemo(() => buildVariableInfo(workspace), [workspace]);
+  const variableValues = useMemo(() => workspaceVariableValues(workspace), [workspace]);
+  const resolvedUrl = substituteVars(draft.url, variableValues) ?? draft.url;
   const [tab, setTab] = useState<"message" | "metadata" | "settings" | "definition">("message");
   const [serviceFiles, setServiceFiles] = useState<Set<string>>(new Set());
   const [schemaFields, setSchemaFields] = useState<ProtoFieldSchema[] | undefined>(undefined);
@@ -293,7 +312,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
     setSchemaFields(undefined);
     const canUseImportedProto = draft.protoSource === "imported" && !!draft.activeProtoFile;
     fetchGrpcMethodSchema({
-      url: draft.url,
+      url: resolvedUrl,
       service,
       method,
       protoFiles: canUseImportedProto ? protoFiles : undefined,
@@ -317,7 +336,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
     let cancelled = false;
     const canUseImportedProto = draft.protoSource === "imported" && !!draft.activeProtoFile;
     fetchGrpcMethodSchema({
-      url: draft.url,
+      url: resolvedUrl,
       service: draft.service,
       method: draft.method,
       protoFiles: canUseImportedProto ? protoFiles : undefined,
@@ -331,7 +350,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.service, draft.method, draft.protoSource, draft.activeProtoFile]);
+  }, [draft.service, draft.method, draft.protoSource, draft.activeProtoFile, resolvedUrl]);
 
   useEffect(() => {
     if (protoFiles.length === 0) {
@@ -369,17 +388,18 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
   return (
     <div className="flex flex-col">
       <div className="px-4 pt-4 flex items-center gap-2">
-        <div className="relative w-[220px] shrink-0 bg-th-surface border border-th-border-input rounded-md">
-          <input
+        <div className="w-[220px] shrink-0">
+          <UrlInput
             value={draft.url}
-            onChange={(e) => onChange({ url: e.target.value })}
+            onChange={(value) => onChange({ url: value })}
+            onKeyDown={(event) => event.key === "Enter" && onSend()}
             placeholder="grpc://localhost:50051"
-            spellCheck={false}
-            className="w-full px-3 py-2 text-[13px] font-mono bg-transparent text-th-text-1 placeholder:text-th-text-4 focus:outline-none"
+            variables={variableGroups}
+            variableInfo={variableInfo}
           />
         </div>
         <GrpcMethodDropdown
-          url={draft.url}
+          url={resolvedUrl}
           protoSource={draft.protoSource}
           protoFiles={protoFiles}
           activeProtoFile={draft.activeProtoFile}
@@ -472,6 +492,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
               onChange={(v) => onChange({ messageJson: v })}
               placeholder={messagePlaceholder}
               protoFields={schemaFields}
+              variables={variableGroups}
               storageKey="relay-grpc-message-height"
               defaultHeight={200}
               resizeLabel="gRPC message editor"
@@ -486,7 +507,14 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
           </div>
         )}
         {tab === "metadata" && (
-          <KeyValueEditor rows={draft.metadata} onChangeRows={(rows) => onChange({ metadata: rows })} placeholderKey="metadata key" placeholderVal="value" />
+          <KeyValueEditor
+            rows={draft.metadata}
+            onChangeRows={(rows) => onChange({ metadata: rows })}
+            placeholderKey="metadata key"
+            placeholderVal="value"
+            variables={variableGroups}
+            variableInfo={variableInfo}
+          />
         )}
         {tab === "settings" && (
           <div className="flex flex-col gap-4">

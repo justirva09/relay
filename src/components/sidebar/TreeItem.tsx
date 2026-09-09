@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { TreeNode } from "../../types";
+import { GrpcMethodType, GrpcRequestNode, TreeNode } from "../../types";
 import { useWorkspace } from "../../store";
 import { AddRequestDropdown } from "./AddRequestDropdown";
 import { METHOD_COLOR, DropInfo, getSuppressNextClick } from "./shared";
@@ -16,7 +16,14 @@ function FolderIcon({ open }: { open: boolean }) {
   );
 }
 
-export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onDelete, draggingIds, dropInfo, selectedIds, onItemMouseDown, onItemClick, onAddFromCurl }: {
+const GRPC_METHOD_BADGE: Record<GrpcMethodType, { icon: string; color: string; label: string }> = {
+  unary: { icon: "→", color: "text-emerald-400", label: "Unary" },
+  "server-stream": { icon: "↓", color: "text-amber-400", label: "Server streaming" },
+  "client-stream": { icon: "↑", color: "text-sky-400", label: "Client streaming" },
+  bidi: { icon: "↕", color: "text-violet-400", label: "Bidirectional streaming" },
+};
+
+export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onDelete, draggingIds, dropInfo, selectedIds, onItemMouseDown, onItemClick, onAddFromCurl, onImportGrpc, onInspectGrpc }: {
   node: TreeNode;
   depth: number;
   onCtxMenu: (e: React.MouseEvent, node: TreeNode) => void;
@@ -29,6 +36,8 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
   onItemMouseDown: (nodeId: string, e: React.MouseEvent) => void;
   onItemClick: (nodeId: string, e: React.MouseEvent) => boolean;
   onAddFromCurl: (parentId: string) => void;
+  onImportGrpc: (parentId: string) => void;
+  onInspectGrpc: (node: GrpcRequestNode) => void;
 }) {
   const { addFolder, addRequest, addGrpcRequest, renameNode, toggleCollapse, openTab, activeTabId, tabs } = useWorkspace();
   const [editing, setEditing] = useState(false);
@@ -108,6 +117,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
                 title="New request"
                 onAddHttp={() => addRequest(node.id)}
                 onAddGrpc={() => addGrpcRequest(node.id)}
+                onImportGrpc={() => onImportGrpc(node.id)}
                 onAddFromCurl={() => onAddFromCurl(node.id)}
                 className="h-5 w-5 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
               />
@@ -136,7 +146,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
               </div>
             )}
             {node.children.map((c) => (
-              <TreeItem key={c.id} node={c} depth={depth + 1} onCtxMenu={onCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={clearTriggerEdit} onDelete={onDelete} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={onItemMouseDown} onItemClick={onItemClick} onAddFromCurl={onAddFromCurl} />
+              <TreeItem key={c.id} node={c} depth={depth + 1} onCtxMenu={onCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={clearTriggerEdit} onDelete={onDelete} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={onItemMouseDown} onItemClick={onItemClick} onAddFromCurl={onAddFromCurl} onImportGrpc={onImportGrpc} onInspectGrpc={onInspectGrpc} />
             ))}
           </div>
         )}
@@ -149,6 +159,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
   const isDirty = tabs.find((t) => t.nodeId === node.id)?.dirty;
 
   if (node.kind === "grpc") {
+    const methodBadge = GRPC_METHOD_BADGE[node.request.methodType] ?? GRPC_METHOD_BADGE.unary;
     return (
       <div
         data-tree-id={node.id}
@@ -170,12 +181,10 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
         onContextMenu={(e) => onCtxMenu(e, node)}
       >
         <span
-          title={node.request.protoSource === "reflection" ? "Server reflection" : undefined}
-          className={`font-mono text-[9.5px] font-bold w-9 shrink-0 ${
-            node.request.protoSource === "reflection" ? "text-rose-400" : "text-th-accent-text"
-          }`}
+          title={`${methodBadge.label} · ${node.request.protoSource === "reflection" ? "Server reflection" : "Imported proto"}`}
+          className={`font-mono text-[15px] font-bold w-9 text-center shrink-0 ${methodBadge.color}`}
         >
-          gRPC
+          {methodBadge.icon}
         </span>
         {editing ? (
           <input
@@ -199,6 +208,16 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
           </span>
         )}
         {isDirty && <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />}
+        {hover && !editing && (
+          <button
+            title="Method info"
+            aria-label={`Inspect ${node.name}`}
+            onClick={(e) => { e.stopPropagation(); onInspectGrpc(node); }}
+            className="h-5 w-5 grid place-items-center rounded font-mono text-[11px] text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg shrink-0"
+          >
+            i
+          </button>
+        )}
         {hover && !editing && (
           <button
             title="Delete"

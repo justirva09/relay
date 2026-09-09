@@ -1,5 +1,5 @@
 use prost::Message;
-use prost_reflect::{DescriptorPool, DynamicMessage, FieldDescriptor, Kind, MessageDescriptor};
+use prost_reflect::{DescriptorPool, DynamicMessage, FieldDescriptor, Kind, MessageDescriptor, Value};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -25,6 +25,7 @@ use protox::file::{ChainFileResolver, File as ProtoFile, FileResolver, GoogleFil
 pub struct GrpcMethodInfo {
     pub name: String,
     pub method_type: String,
+    pub template: String,
 }
 
 #[derive(Serialize)]
@@ -340,6 +341,8 @@ pub fn grpc_list_services_from_proto(
             .map(|m| GrpcMethodInfo {
                 name: m.name().to_string(),
                 method_type: method_type_str(m.is_client_streaming(), m.is_server_streaming()).to_string(),
+                template: serde_json::to_string_pretty(&message_template(&m.input(), &HashSet::new(), true))
+                    .unwrap_or_else(|_| "{}".to_string()),
             })
             .collect();
         services.push(GrpcServiceInfo { name: service_desc.full_name().to_string(), methods });
@@ -384,6 +387,8 @@ pub async fn grpc_list_services(url: String) -> Result<Vec<GrpcServiceInfo>, Str
             .map(|m| GrpcMethodInfo {
                 name: m.name().to_string(),
                 method_type: method_type_str(m.is_client_streaming(), m.is_server_streaming()).to_string(),
+                template: serde_json::to_string_pretty(&message_template(&m.input(), &HashSet::new(), true))
+                    .unwrap_or_else(|_| "{}".to_string()),
             })
             .collect();
         services.push(GrpcServiceInfo { name: svc.name, methods });
@@ -447,6 +452,7 @@ pub struct ProtoFieldSchema {
     pub kind: String,
     pub type_name: String,
     pub repeated: bool,
+    pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oneof: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -458,14 +464,19 @@ pub struct ProtoFieldSchema {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GrpcMethodSchema {
     pub template: String,
     pub fields: Vec<ProtoFieldSchema>,
+    pub input_type: String,
+    pub output_type: String,
+    pub output_fields: Vec<ProtoFieldSchema>,
 }
 
 fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFieldSchema {
     let name = field.json_name().to_string();
     let repeated = field.is_list();
+    let required = field_is_required(field);
     let oneof = field
         .containing_oneof()
         .filter(|oneof| !oneof.is_synthetic())
@@ -507,6 +518,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
             kind: "map".to_string(),
             type_name,
             repeated: false,
+            required,
             oneof,
             fields: vec![],
             enum_values: vec![],
@@ -523,6 +535,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
                     kind: "message".to_string(),
                     type_name,
                     repeated,
+                    required,
                     oneof,
                     fields: vec![],
                     enum_values: vec![],
@@ -537,6 +550,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
                     kind: "message".to_string(),
                     type_name,
                     repeated,
+                    required,
                     oneof,
                     fields,
                     enum_values: vec![],
@@ -549,6 +563,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
             kind: "enum".to_string(),
             type_name,
             repeated,
+            required,
             oneof,
             fields: vec![],
             enum_values: e.values().map(|v| v.name().to_string()).collect(),
@@ -559,6 +574,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
             kind: "bool".to_string(),
             type_name,
             repeated,
+            required,
             oneof,
             fields: vec![],
             enum_values: vec![],
@@ -569,6 +585,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
             kind: "string".to_string(),
             type_name,
             repeated,
+            required,
             oneof,
             fields: vec![],
             enum_values: vec![],
@@ -579,12 +596,22 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
             kind: "number".to_string(),
             type_name,
             repeated,
+            required,
             oneof,
             fields: vec![],
             enum_values: vec![],
             map_value: None,
         },
     }
+}
+
+fn message_schema_fields(message: &MessageDescriptor) -> Vec<ProtoFieldSchema> {
+    let mut ancestors = HashSet::new();
+    ancestors.insert(message.full_name().to_string());
+    message
+        .fields()
+        .map(|field| field_schema(&field, &ancestors))
+        .collect()
 }
 
 // proto3 JSON mapping wants 64-bit ints as decimal strings, everything else as a number.
@@ -616,14 +643,32 @@ fn well_known_placeholder(message: &MessageDescriptor) -> Option<serde_json::Val
     }
 }
 
-fn field_placeholder(field: &FieldDescriptor, ancestors: &HashSet<String>) -> serde_json::Value {
+fn field_is_required(field: &FieldDescriptor) -> bool {
+    if field.is_required() {
+        return true;
+    }
+    field.options().extensions().any(|(extension, value)| {
+        if extension.full_name() != "google.api.field_behavior" {
+            return false;
+        }
+        let Kind::Enum(enumeration) = extension.kind() else {
+            return false;
+        };
+        let Some(required) = enumeration.get_value_by_name("REQUIRED") else {
+            return false;
+        };
+        matches!(value, Value::List(values) if values.iter().any(|value| matches!(value, Value::EnumNumber(number) if *number == required.number())))
+    })
+}
+
+fn field_placeholder(field: &FieldDescriptor, ancestors: &HashSet<String>, required_only: bool) -> serde_json::Value {
     if field.is_map() {
         return json!({});
     }
 
     let single = |kind: &Kind, ancestors: &HashSet<String>| -> serde_json::Value {
         match kind {
-            Kind::Message(m) => well_known_placeholder(m).unwrap_or_else(|| message_template(m, ancestors)),
+            Kind::Message(m) => well_known_placeholder(m).unwrap_or_else(|| message_template(m, ancestors, required_only)),
             Kind::Enum(e) => json!(e.values().next().map(|v| v.name().to_string()).unwrap_or_default()),
             other => scalar_placeholder(other),
         }
@@ -636,7 +681,7 @@ fn field_placeholder(field: &FieldDescriptor, ancestors: &HashSet<String>) -> se
     }
 }
 
-fn message_template(desc: &MessageDescriptor, ancestors: &HashSet<String>) -> serde_json::Value {
+fn message_template(desc: &MessageDescriptor, ancestors: &HashSet<String>, required_only: bool) -> serde_json::Value {
     if let Some(value) = well_known_placeholder(desc) {
         return value;
     }
@@ -649,10 +694,14 @@ fn message_template(desc: &MessageDescriptor, ancestors: &HashSet<String>) -> se
 
     let mut obj = serde_json::Map::new();
     for field in desc.fields() {
+        let required = field_is_required(&field);
+        if required_only && !required {
+            continue;
+        }
         // A oneof may be completely unset, but setting multiple alternatives is
         // invalid. Leave real oneofs out of the default template so the generated
         // JSON is always valid and let autocomplete offer the alternatives.
-        if field.containing_oneof().is_some_and(|oneof| !oneof.is_synthetic()) {
+        if field.containing_oneof().is_some_and(|oneof| !oneof.is_synthetic()) && !required {
             continue;
         }
         // Any requires a concrete @type that cannot be inferred from its field
@@ -660,7 +709,7 @@ fn message_template(desc: &MessageDescriptor, ancestors: &HashSet<String>) -> se
         if matches!(field.kind(), Kind::Message(message) if message.full_name() == "google.protobuf.Any") {
             continue;
         }
-        obj.insert(field.json_name().to_string(), field_placeholder(&field, &next));
+        obj.insert(field.json_name().to_string(), field_placeholder(&field, &next, required_only));
     }
     serde_json::Value::Object(obj)
 }
@@ -683,13 +732,22 @@ pub async fn grpc_method_schema(
         .find(|m| m.name() == method)
         .ok_or_else(|| format!("method {} not found on {}", method, service))?;
     let input_desc = method_desc.input();
+    let output_desc = method_desc.output();
 
     let ancestors = HashSet::new();
-    let template_value = message_template(&input_desc, &ancestors);
+    let template_value = message_template(&input_desc, &ancestors, true);
     let template = serde_json::to_string_pretty(&template_value).map_err(|e| e.to_string())?;
     let fields = input_desc.fields().map(|f| field_schema(&f, &ancestors)).collect();
 
-    Ok(GrpcMethodSchema { template, fields })
+    let output_fields = message_schema_fields(&output_desc);
+
+    Ok(GrpcMethodSchema {
+        template,
+        fields,
+        input_type: input_desc.full_name().to_string(),
+        output_type: output_desc.full_name().to_string(),
+        output_fields,
+    })
 }
 
 fn metadata_entries(metadata: &tonic::metadata::MetadataMap) -> Vec<(String, String)> {
@@ -1044,6 +1102,42 @@ mod schema_tests {
     }
 
     #[test]
+    fn service_catalog_includes_an_importable_message_template() {
+        let files = vec![ProtoFileInput { name: "test.proto".to_string(), content: TEST_PROTO.to_string() }];
+        let services = grpc_list_services_from_proto(files, "test.proto".to_string()).expect("catalog should build");
+        let method = &services[0].methods[0];
+
+        assert_eq!(services[0].name, "test.PetService");
+        assert_eq!(method.name, "CreatePet");
+        assert_eq!(method.method_type, "unary");
+        let template: serde_json::Value = serde_json::from_str(&method.template).expect("template should be JSON");
+        assert_eq!(template, json!({}), "proto3 fields without REQUIRED behavior should be omitted");
+    }
+
+    #[test]
+    fn required_only_template_keeps_proto2_required_fields() {
+        let source = r#"
+            syntax = "proto2";
+            package required_test;
+
+            message Input {
+                required string name = 1;
+                optional string nickname = 2;
+                repeated string tags = 3;
+            }
+
+            service RequiredService {
+                rpc Call(Input) returns (Input);
+            }
+        "#;
+        let files = vec![ProtoFileInput { name: "required.proto".to_string(), content: source.to_string() }];
+        let services = grpc_list_services_from_proto(files, "required.proto".to_string()).expect("catalog should build");
+        let template: serde_json::Value = serde_json::from_str(&services[0].methods[0].template).expect("template should be JSON");
+
+        assert_eq!(template, json!({ "name": "" }));
+    }
+
+    #[test]
     fn generates_template_and_schema_for_all_field_kinds() {
         let pool = test_pool();
         let service = pool.get_service_by_name("test.PetService").unwrap();
@@ -1051,7 +1145,7 @@ mod schema_tests {
         let input = method.input();
 
         let ancestors = HashSet::new();
-        let template = message_template(&input, &ancestors);
+        let template = message_template(&input, &ancestors, false);
         let obj = template.as_object().unwrap();
 
         assert_eq!(obj["name"], json!(""));
@@ -1112,7 +1206,7 @@ mod schema_tests {
         let node = pool.get_message_by_name("test.Node").unwrap();
         let ancestors = HashSet::new();
         // Node.children is `repeated Node`, must terminate instead of recursing forever.
-        let template = message_template(&node, &ancestors);
+        let template = message_template(&node, &ancestors, false);
         assert!(template.is_object());
     }
 

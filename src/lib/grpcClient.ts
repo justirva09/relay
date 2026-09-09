@@ -4,6 +4,7 @@ import { GrpcMethodType } from "../types";
 export interface GrpcCatalogMethod {
   name: string;
   methodType: GrpcMethodType;
+  template?: string;
 }
 
 export interface GrpcCatalogService {
@@ -14,6 +15,7 @@ export interface GrpcCatalogService {
 interface RawMethodInfo {
   name: string;
   method_type: string;
+  template: string;
 }
 
 interface RawServiceInfo {
@@ -30,7 +32,7 @@ export async function listGrpcServices(url: string): Promise<GrpcCatalogService[
   const raw = await invoke<RawServiceInfo[]>("grpc_list_services", { url });
   return raw.map((s) => ({
     name: s.name,
-    methods: s.methods.map((m) => ({ name: m.name, methodType: m.method_type as GrpcMethodType })),
+    methods: s.methods.map((m) => ({ name: m.name, methodType: m.method_type as GrpcMethodType, template: m.template })),
   }));
 }
 
@@ -41,7 +43,7 @@ export async function listGrpcServicesFromProto(
   const raw = await invoke<RawServiceInfo[]>("grpc_list_services_from_proto", { files, entryFile });
   return raw.map((s) => ({
     name: s.name,
-    methods: s.methods.map((m) => ({ name: m.name, methodType: m.method_type as GrpcMethodType })),
+    methods: s.methods.map((m) => ({ name: m.name, methodType: m.method_type as GrpcMethodType, template: m.template })),
   }));
 }
 
@@ -54,6 +56,7 @@ export interface ProtoFieldSchema {
   kind: "string" | "number" | "bool" | "enum" | "message" | "map";
   typeName: string;
   repeated: boolean;
+  required: boolean;
   oneof?: string;
   fields?: ProtoFieldSchema[];
   enumValues?: string[];
@@ -63,6 +66,9 @@ export interface ProtoFieldSchema {
 export interface GrpcMethodSchema {
   template: string;
   fields: ProtoFieldSchema[];
+  inputType: string;
+  outputType: string;
+  outputFields: ProtoFieldSchema[];
 }
 
 export function fetchGrpcMethodSchema(params: {

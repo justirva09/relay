@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 
-export function AddRequestDropdown({ title, onAddHttp, onAddGrpc, onAddFromCurl, className }: {
+export function AddRequestDropdown({ title, onAddHttp, onAddGrpc, onImportGrpc, onAddFromCurl, className }: {
   title: string;
   onAddHttp: () => void;
   onAddGrpc: () => void;
+  onImportGrpc: () => void;
   onAddFromCurl: () => void;
   className: string;
 }) {
@@ -36,7 +37,13 @@ export function AddRequestDropdown({ title, onAddHttp, onAddGrpc, onAddFromCurl,
             onClick={(e) => { e.stopPropagation(); onAddGrpc(); setOpen(false); }}
             className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
           >
-            gRPC Request
+            New gRPC Request
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onImportGrpc(); setOpen(false); }}
+            className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+          >
+            Import gRPC API
           </button>
           <div className="my-1 border-t border-th-border" />
           <button
