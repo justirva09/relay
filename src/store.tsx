@@ -532,6 +532,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             metadata: result.metadata,
             body: result.json,
             error: null,
+            compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
           };
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [sentEntry, receivedEntry], streaming: false, lastResponse } : x)));
           cacheGrpcResponse(id, lastResponse);
@@ -546,6 +547,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             metadata: [],
             body: "",
             error: errText,
+            compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
           };
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [sentEntry, errEntry], streaming: false, lastResponse } : x)));
           cacheGrpcResponse(id, lastResponse);

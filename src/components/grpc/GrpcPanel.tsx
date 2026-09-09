@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { GrpcRequestData, GrpcMethodType, defaultMessageForMethodType } from "../../types";
+import { GrpcRequestData, GrpcMethodType, defaultGrpcRequestSettings, defaultMessageForMethodType } from "../../types";
 import { MOCK_GRPC_SERVICES } from "../../lib/grpcMock";
 import { listGrpcServices, listGrpcServicesFromProto, listProtoServiceFiles, fetchGrpcMethodSchema, GrpcCatalogService, ProtoFieldSchema } from "../../lib/grpcClient";
 import ResizableCodeEditor from "../ResizableCodeEditor";
@@ -333,6 +333,15 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
       : '{\n  "field": "value"\n}';
 
   const enabledMetadataCount = draft.metadata.filter((m) => m.enabled && m.key.trim()).length;
+  const settingsError =
+    !Number.isFinite(draft.settings.timeoutMs) || !Number.isInteger(draft.settings.timeoutMs) || draft.settings.timeoutMs < 0
+      ? "Request deadline must be a non-negative whole number."
+      : !Number.isFinite(draft.settings.maxResponseSizeMb) ||
+          !Number.isInteger(draft.settings.maxResponseSizeMb) ||
+          draft.settings.maxResponseSizeMb < 1 ||
+          draft.settings.maxResponseSizeMb > 1024
+        ? "Max response size must be a whole number between 1 and 1024 MB."
+        : null;
 
   return (
     <div className="flex flex-col">
@@ -357,7 +366,8 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
         />
         <button
           onClick={onSend}
-          disabled={streaming || !draft.method}
+          disabled={streaming || !draft.method || !!settingsError}
+          title={settingsError ?? undefined}
           className="px-4 py-2 rounded-md text-[13px] font-semibold border border-transparent bg-th-accent text-white hover:bg-th-accent-hover transition-colors shrink-0 disabled:opacity-60"
         >
           {streaming ? "Streaming…" : "Send"}
@@ -439,6 +449,19 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
           <div className="flex flex-col gap-4">
             <div className="flex items-center justify-between gap-4">
               <div>
+                <p className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide">Request behavior</p>
+                {settingsError && <p className="mt-1 text-[11.5px] font-mono text-rose-400">{settingsError}</p>}
+              </div>
+              <button
+                onClick={() => onChange({ settings: defaultGrpcRequestSettings() })}
+                className="px-2.5 py-1 rounded-md text-[11.5px] font-mono text-th-text-3 ring-1 ring-th-border-input hover:text-th-text-1 hover:bg-th-hover"
+              >
+                Reset defaults
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div>
                 <p className="text-[13px] font-medium text-th-text-1">Request deadline (ms)</p>
                 <p className="text-[11.5px] text-th-text-3">Maximum time for discovery, connection, and response; 0 uses 30 seconds</p>
               </div>
@@ -487,9 +510,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
                 min={1}
                 max={1024}
                 value={draft.settings.maxResponseSizeMb}
-                onChange={(e) => onChange({
-                  settings: { ...draft.settings, maxResponseSizeMb: Math.min(1024, Math.max(1, Number(e.target.value) || 1)) },
-                })}
+                onChange={(e) => onChange({ settings: { ...draft.settings, maxResponseSizeMb: Number(e.target.value) } })}
                 className="w-28 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 focus:outline-none focus:border-th-border-focus"
               />
             </div>

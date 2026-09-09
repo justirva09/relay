@@ -260,6 +260,7 @@ export interface GrpcResponseSummary {
   metadata: [string, string][];
   body: string;
   error: string | null;
+  compression?: "gzip";
 }
 
 export interface GrpcTabState {
@@ -335,12 +336,21 @@ export function normalizeRequestData(req: any): RequestData {
 }
 
 export function normalizeGrpcRequestData(req: any): GrpcRequestData {
+  const defaults = defaultGrpcRequestSettings();
+  const settings = req.settings && typeof req.settings === "object" ? req.settings : {};
+  const timeoutMs = Number(settings.timeoutMs);
+  const maxResponseSizeMb = Number(settings.maxResponseSizeMb);
   return {
     ...req,
-    settings:
-      req.settings && typeof req.settings === "object"
-        ? { ...defaultGrpcRequestSettings(), ...req.settings }
-        : defaultGrpcRequestSettings(),
+    settings: {
+      timeoutMs: Number.isInteger(timeoutMs) && timeoutMs >= 0 ? timeoutMs : defaults.timeoutMs,
+      waitForReady: typeof settings.waitForReady === "boolean" ? settings.waitForReady : defaults.waitForReady,
+      compression: settings.compression === "gzip" ? "gzip" : "none",
+      maxResponseSizeMb:
+        Number.isInteger(maxResponseSizeMb) && maxResponseSizeMb >= 1 && maxResponseSizeMb <= 1024
+          ? maxResponseSizeMb
+          : defaults.maxResponseSizeMb,
+    },
   };
 }
 

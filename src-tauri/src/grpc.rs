@@ -64,6 +64,30 @@ pub struct GrpcInvokeResponse {
     pub duration_ms: u64,
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_MAX_RESPONSE_SIZE: usize = 4 * 1024 * 1024;
+const MAX_RESPONSE_SIZE: usize = 1024 * 1024 * 1024;
+
+fn request_timeout(timeout_ms: Option<u64>) -> Duration {
+    Duration::from_millis(timeout_ms.filter(|value| *value > 0).unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS))
+}
+
+fn max_response_size(value: Option<usize>) -> Result<usize, String> {
+    let value = value.unwrap_or(DEFAULT_MAX_RESPONSE_SIZE);
+    if value == 0 || value > MAX_RESPONSE_SIZE {
+        return Err("max response size must be between 1 byte and 1024 MB".to_string());
+    }
+    Ok(value)
+}
+
+fn compression_encoding(value: Option<&str>) -> Result<Option<CompressionEncoding>, String> {
+    match value.unwrap_or("none") {
+        "none" => Ok(None),
+        "gzip" => Ok(Some(CompressionEncoding::Gzip)),
+        value => Err(format!("unsupported gRPC compression: {value}")),
+    }
+}
+
 /// tonic/hyper only understand http(s):// schemes. Rewrite the grpc(s)://
 /// convention from the UI, and default a bare host with no scheme to TLS
 /// since that's how most hosted gRPC endpoints are reachable.
@@ -626,7 +650,12 @@ pub async fn grpc_method_schema(
     Ok(GrpcMethodSchema { template, fields })
 }
 
-async fn invoke_unary_inner(payload: GrpcInvokeRequest, deadline: Instant) -> Result<GrpcInvokeResponse, String> {
+async fn invoke_unary_inner(
+    payload: GrpcInvokeRequest,
+    deadline: Instant,
+    max_response_size: usize,
+    compression: Option<CompressionEncoding>,
+) -> Result<GrpcInvokeResponse, String> {
     let pool = match (&payload.proto_files, &payload.entry_file) {
         (Some(files), Some(entry_file)) => build_pool_from_proto_files(files, entry_file)?,
         _ => build_pool_for_service_with_wait(&payload.url, &payload.service, payload.wait_for_ready).await?,
@@ -652,19 +681,9 @@ async fn invoke_unary_inner(payload: GrpcInvokeRequest, deadline: Instant) -> Re
     let started = Instant::now();
 
     let channel = connect_for_request(&payload.url, payload.wait_for_ready).await?;
-    let max_response_size = payload.max_response_size_bytes.unwrap_or(4 * 1024 * 1024);
-    if max_response_size == 0 {
-        return Err("max response size must be greater than zero".to_string());
-    }
     let mut grpc_client = tonic::client::Grpc::new(channel).max_decoding_message_size(max_response_size);
-    match payload.compression.as_deref().unwrap_or("none") {
-        "none" => {}
-        "gzip" => {
-            grpc_client = grpc_client
-                .send_compressed(CompressionEncoding::Gzip)
-                .accept_compressed(CompressionEncoding::Gzip);
-        }
-        value => return Err(format!("unsupported gRPC compression: {value}")),
+    if let Some(encoding) = compression {
+        grpc_client = grpc_client.send_compressed(encoding).accept_compressed(encoding);
     }
     grpc_client
         .ready()
@@ -721,9 +740,11 @@ async fn invoke_unary_inner(payload: GrpcInvokeRequest, deadline: Instant) -> Re
 
 #[tauri::command]
 pub async fn grpc_invoke_unary(payload: GrpcInvokeRequest) -> Result<GrpcInvokeResponse, String> {
-    let timeout = Duration::from_millis(payload.timeout_ms.filter(|value| *value > 0).unwrap_or(30_000));
+    let timeout = request_timeout(payload.timeout_ms);
+    let max_response_size = max_response_size(payload.max_response_size_bytes)?;
+    let compression = compression_encoding(payload.compression.as_deref())?;
     let deadline = Instant::now() + timeout;
-    tokio::time::timeout(timeout, invoke_unary_inner(payload, deadline))
+    tokio::time::timeout(timeout, invoke_unary_inner(payload, deadline, max_response_size, compression))
         .await
         .map_err(|_| format!("gRPC request deadline exceeded after {} ms", timeout.as_millis()))?
 }
@@ -855,5 +876,37 @@ mod schema_tests {
         // Node.children is `repeated Node`, must terminate instead of recursing forever.
         let template = message_template(&node, &ancestors);
         assert!(template.is_object());
+    }
+
+    #[test]
+    fn invoke_settings_use_safe_defaults_and_validate_bounds() {
+        assert_eq!(request_timeout(None), Duration::from_millis(DEFAULT_REQUEST_TIMEOUT_MS));
+        assert_eq!(request_timeout(Some(0)), Duration::from_millis(DEFAULT_REQUEST_TIMEOUT_MS));
+        assert_eq!(request_timeout(Some(1_500)), Duration::from_millis(1_500));
+
+        assert_eq!(max_response_size(None).unwrap(), DEFAULT_MAX_RESPONSE_SIZE);
+        assert!(max_response_size(Some(0)).is_err());
+        assert!(max_response_size(Some(MAX_RESPONSE_SIZE + 1)).is_err());
+        assert_eq!(max_response_size(Some(8 * 1024 * 1024)).unwrap(), 8 * 1024 * 1024);
+
+        assert!(compression_encoding(None).unwrap().is_none());
+        assert!(matches!(compression_encoding(Some("gzip")), Ok(Some(CompressionEncoding::Gzip))));
+        assert!(compression_encoding(Some("brotli")).is_err());
+    }
+
+    #[test]
+    fn older_invoke_payloads_deserialize_without_settings() {
+        let payload: GrpcInvokeRequest = serde_json::from_value(json!({
+            "url": "grpc://localhost:50051",
+            "service": "test.PetService",
+            "method": "CreatePet",
+            "message_json": "{}"
+        }))
+        .expect("legacy payload should deserialize");
+
+        assert_eq!(payload.timeout_ms, None);
+        assert!(!payload.wait_for_ready);
+        assert_eq!(payload.compression, None);
+        assert_eq!(payload.max_response_size_bytes, None);
     }
 }

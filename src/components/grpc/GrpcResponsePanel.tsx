@@ -19,6 +19,12 @@ function formatBody(body: string): string {
   }
 }
 
+function errorBadge(error: string): string {
+  if (/deadline exceeded/i.test(error)) return "DEADLINE EXCEEDED";
+  const status = /gRPC error \(([^)]+)\)/.exec(error)?.[1];
+  return status ? status.replace(/([a-z])([A-Z])/g, "$1 $2").toUpperCase() : "ERROR";
+}
+
 function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
   const [tab, setTab] = useState<"body" | "metadata">("body");
   const [copied, setCopied] = useState(false);
@@ -80,7 +86,7 @@ function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
       <div className="px-4 py-2.5 flex items-center gap-3 text-[12.5px] font-mono shrink-0">
         {response.error ? (
           <>
-            <span className="px-2 py-0.5 rounded-md text-[13px] font-mono font-semibold ring-1 text-rose-400 bg-rose-400/10 ring-rose-400/30">ERROR</span>
+            <span className="px-2 py-0.5 rounded-md text-[13px] font-mono font-semibold ring-1 text-rose-400 bg-rose-400/10 ring-rose-400/30">{errorBadge(response.error)}</span>
             <span className="text-th-text-2">gRPC call failed</span>
           </>
         ) : (
@@ -90,6 +96,14 @@ function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
             <span className="text-th-text-4">·</span>
             <span className="text-th-text-2">{bytesToSize(response.sizeBytes)}</span>
           </>
+        )}
+        {response.compression === "gzip" && (
+          <span
+            title="Request compression: gzip"
+            className="px-1.5 py-0.5 rounded text-[10.5px] text-th-text-3 bg-th-surface ring-1 ring-th-border-input"
+          >
+            gzip
+          </span>
         )}
       </div>
 
