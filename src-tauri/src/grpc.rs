@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
-use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
+use tonic::codec::{Codec, CompressionEncoding, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
 
@@ -44,6 +44,14 @@ pub struct GrpcInvokeRequest {
     #[serde(default)]
     pub metadata: Vec<(String, String)>,
     #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub wait_for_ready: bool,
+    #[serde(default)]
+    pub compression: Option<String>,
+    #[serde(default)]
+    pub max_response_size_bytes: Option<usize>,
+    #[serde(default)]
     pub proto_files: Option<Vec<ProtoFileInput>>,
     #[serde(default)]
     pub entry_file: Option<String>,
@@ -54,6 +62,30 @@ pub struct GrpcInvokeResponse {
     pub json: String,
     pub metadata: Vec<(String, String)>,
     pub duration_ms: u64,
+}
+
+const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_MAX_RESPONSE_SIZE: usize = 4 * 1024 * 1024;
+const MAX_RESPONSE_SIZE: usize = 1024 * 1024 * 1024;
+
+fn request_timeout(timeout_ms: Option<u64>) -> Duration {
+    Duration::from_millis(timeout_ms.filter(|value| *value > 0).unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS))
+}
+
+fn max_response_size(value: Option<usize>) -> Result<usize, String> {
+    let value = value.unwrap_or(DEFAULT_MAX_RESPONSE_SIZE);
+    if value == 0 || value > MAX_RESPONSE_SIZE {
+        return Err("max response size must be between 1 byte and 1024 MB".to_string());
+    }
+    Ok(value)
+}
+
+fn compression_encoding(value: Option<&str>) -> Result<Option<CompressionEncoding>, String> {
+    match value.unwrap_or("none") {
+        "none" => Ok(None),
+        "gzip" => Ok(Some(CompressionEncoding::Gzip)),
+        value => Err(format!("unsupported gRPC compression: {value}")),
+    }
 }
 
 /// tonic/hyper only understand http(s):// schemes. Rewrite the grpc(s)://
@@ -90,6 +122,18 @@ async fn connect(url: &str) -> Result<Channel, String> {
         .map_err(|e| format!("connect failed: {e}"))
 }
 
+async fn connect_for_request(url: &str, wait_for_ready: bool) -> Result<Channel, String> {
+    if !wait_for_ready {
+        return connect(url).await;
+    }
+    loop {
+        match connect(url).await {
+            Ok(channel) => return Ok(channel),
+            Err(_) => tokio::time::sleep(Duration::from_millis(250)).await,
+        }
+    }
+}
+
 async fn reflection_request(channel: Channel, req: MessageRequest) -> Result<MessageResponse, String> {
     let mut client = ServerReflectionClient::new(channel);
     let out_req = ServerReflectionRequest {
@@ -123,7 +167,15 @@ fn decode_file_descriptor_response(resp: MessageResponse) -> Result<FileDescript
 /// DescriptorPool. `file_containing_symbol` isn't guaranteed to include
 /// imports, so missing ones get fetched by filename until nothing's left.
 async fn build_pool_for_service(url: &str, service: &str) -> Result<DescriptorPool, String> {
-    let channel = connect(url).await?;
+    build_pool_for_service_with_wait(url, service, false).await
+}
+
+async fn build_pool_for_service_with_wait(
+    url: &str,
+    service: &str,
+    wait_for_ready: bool,
+) -> Result<DescriptorPool, String> {
+    let channel = connect_for_request(url, wait_for_ready).await?;
 
     let resp = reflection_request(
         channel.clone(),
@@ -367,7 +419,10 @@ impl Codec for DynamicCodec {
 pub struct ProtoFieldSchema {
     pub name: String,
     pub kind: String,
+    pub type_name: String,
     pub repeated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oneof: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<ProtoFieldSchema>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -383,33 +438,110 @@ pub struct GrpcMethodSchema {
 fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFieldSchema {
     let name = field.json_name().to_string();
     let repeated = field.is_list();
+    let oneof = field
+        .containing_oneof()
+        .filter(|oneof| !oneof.is_synthetic())
+        .map(|oneof| oneof.name().to_string());
+    let type_name = if field.is_map() {
+        "map".to_string()
+    } else {
+        match field.kind() {
+            Kind::Double => "double".to_string(),
+            Kind::Float => "float".to_string(),
+            Kind::Int32 => "int32".to_string(),
+            Kind::Int64 => "int64".to_string(),
+            Kind::Uint32 => "uint32".to_string(),
+            Kind::Uint64 => "uint64".to_string(),
+            Kind::Sint32 => "sint32".to_string(),
+            Kind::Sint64 => "sint64".to_string(),
+            Kind::Fixed32 => "fixed32".to_string(),
+            Kind::Fixed64 => "fixed64".to_string(),
+            Kind::Sfixed32 => "sfixed32".to_string(),
+            Kind::Sfixed64 => "sfixed64".to_string(),
+            Kind::Bool => "bool".to_string(),
+            Kind::String => "string".to_string(),
+            Kind::Bytes => "bytes".to_string(),
+            Kind::Message(message) => message.full_name().to_string(),
+            Kind::Enum(enumeration) => enumeration.full_name().to_string(),
+        }
+    };
 
     if field.is_map() {
-        return ProtoFieldSchema { name, kind: "map".to_string(), repeated: false, fields: vec![], enum_values: vec![] };
+        return ProtoFieldSchema {
+            name,
+            kind: "map".to_string(),
+            type_name,
+            repeated: false,
+            oneof,
+            fields: vec![],
+            enum_values: vec![],
+        };
     }
 
     match field.kind() {
         Kind::Message(m) => {
             let full_name = m.full_name().to_string();
             if ancestors.contains(&full_name) {
-                ProtoFieldSchema { name, kind: "message".to_string(), repeated, fields: vec![], enum_values: vec![] }
+                ProtoFieldSchema {
+                    name,
+                    kind: "message".to_string(),
+                    type_name,
+                    repeated,
+                    oneof,
+                    fields: vec![],
+                    enum_values: vec![],
+                }
             } else {
                 let mut next = ancestors.clone();
                 next.insert(full_name);
                 let fields = m.fields().map(|f| field_schema(&f, &next)).collect();
-                ProtoFieldSchema { name, kind: "message".to_string(), repeated, fields, enum_values: vec![] }
+                ProtoFieldSchema {
+                    name,
+                    kind: "message".to_string(),
+                    type_name,
+                    repeated,
+                    oneof,
+                    fields,
+                    enum_values: vec![],
+                }
             }
         }
         Kind::Enum(e) => ProtoFieldSchema {
             name,
             kind: "enum".to_string(),
+            type_name,
             repeated,
+            oneof,
             fields: vec![],
             enum_values: e.values().map(|v| v.name().to_string()).collect(),
         },
-        Kind::Bool => ProtoFieldSchema { name, kind: "bool".to_string(), repeated, fields: vec![], enum_values: vec![] },
-        Kind::String | Kind::Bytes => ProtoFieldSchema { name, kind: "string".to_string(), repeated, fields: vec![], enum_values: vec![] },
-        _ => ProtoFieldSchema { name, kind: "number".to_string(), repeated, fields: vec![], enum_values: vec![] },
+        Kind::Bool => ProtoFieldSchema {
+            name,
+            kind: "bool".to_string(),
+            type_name,
+            repeated,
+            oneof,
+            fields: vec![],
+            enum_values: vec![],
+        },
+        Kind::String | Kind::Bytes => ProtoFieldSchema {
+            name,
+            kind: "string".to_string(),
+            type_name,
+            repeated,
+            oneof,
+            fields: vec![],
+            enum_values: vec![],
+        },
+        _ => ProtoFieldSchema {
+            name,
+            kind: "number".to_string(),
+            type_name,
+            repeated,
+            oneof,
+            fields: vec![],
+            enum_values: vec![],
+        },
     }
 }
 
@@ -423,6 +555,25 @@ fn scalar_placeholder(kind: &Kind) -> serde_json::Value {
     }
 }
 
+// Well-known protobuf messages have special ProtoJSON representations instead
+// of their underlying message fields. Keep this aligned with prost-reflect's
+// serde support so generated templates can be sent back without manual fixes.
+fn well_known_placeholder(message: &MessageDescriptor) -> Option<serde_json::Value> {
+    match message.full_name() {
+        "google.protobuf.Timestamp" => Some(json!("1970-01-01T00:00:00Z")),
+        "google.protobuf.Duration" => Some(json!("0s")),
+        "google.protobuf.FieldMask" => Some(json!("")),
+        "google.protobuf.FloatValue" | "google.protobuf.DoubleValue" | "google.protobuf.Int32Value" | "google.protobuf.UInt32Value" => Some(json!(0)),
+        "google.protobuf.Int64Value" | "google.protobuf.UInt64Value" => Some(json!("0")),
+        "google.protobuf.BoolValue" => Some(json!(false)),
+        "google.protobuf.StringValue" | "google.protobuf.BytesValue" => Some(json!("")),
+        "google.protobuf.Struct" | "google.protobuf.Empty" => Some(json!({})),
+        "google.protobuf.ListValue" => Some(json!([])),
+        "google.protobuf.Value" => Some(serde_json::Value::Null),
+        _ => None,
+    }
+}
+
 fn field_placeholder(field: &FieldDescriptor, ancestors: &HashSet<String>) -> serde_json::Value {
     if field.is_map() {
         return json!({});
@@ -430,7 +581,7 @@ fn field_placeholder(field: &FieldDescriptor, ancestors: &HashSet<String>) -> se
 
     let single = |kind: &Kind, ancestors: &HashSet<String>| -> serde_json::Value {
         match kind {
-            Kind::Message(m) => message_template(m, ancestors),
+            Kind::Message(m) => well_known_placeholder(m).unwrap_or_else(|| message_template(m, ancestors)),
             Kind::Enum(e) => json!(e.values().next().map(|v| v.name().to_string()).unwrap_or_default()),
             other => scalar_placeholder(other),
         }
@@ -444,6 +595,9 @@ fn field_placeholder(field: &FieldDescriptor, ancestors: &HashSet<String>) -> se
 }
 
 fn message_template(desc: &MessageDescriptor, ancestors: &HashSet<String>) -> serde_json::Value {
+    if let Some(value) = well_known_placeholder(desc) {
+        return value;
+    }
     let full_name = desc.full_name().to_string();
     if ancestors.contains(&full_name) {
         return json!({});
@@ -453,6 +607,17 @@ fn message_template(desc: &MessageDescriptor, ancestors: &HashSet<String>) -> se
 
     let mut obj = serde_json::Map::new();
     for field in desc.fields() {
+        // A oneof may be completely unset, but setting multiple alternatives is
+        // invalid. Leave real oneofs out of the default template so the generated
+        // JSON is always valid and let autocomplete offer the alternatives.
+        if field.containing_oneof().is_some_and(|oneof| !oneof.is_synthetic()) {
+            continue;
+        }
+        // Any requires a concrete @type that cannot be inferred from its field
+        // descriptor. Leaving it unset is valid; autocomplete still exposes it.
+        if matches!(field.kind(), Kind::Message(message) if message.full_name() == "google.protobuf.Any") {
+            continue;
+        }
         obj.insert(field.json_name().to_string(), field_placeholder(&field, &next));
     }
     serde_json::Value::Object(obj)
@@ -485,11 +650,15 @@ pub async fn grpc_method_schema(
     Ok(GrpcMethodSchema { template, fields })
 }
 
-#[tauri::command]
-pub async fn grpc_invoke_unary(payload: GrpcInvokeRequest) -> Result<GrpcInvokeResponse, String> {
+async fn invoke_unary_inner(
+    payload: GrpcInvokeRequest,
+    deadline: Instant,
+    max_response_size: usize,
+    compression: Option<CompressionEncoding>,
+) -> Result<GrpcInvokeResponse, String> {
     let pool = match (&payload.proto_files, &payload.entry_file) {
         (Some(files), Some(entry_file)) => build_pool_from_proto_files(files, entry_file)?,
-        _ => build_pool_for_service(&payload.url, &payload.service).await?,
+        _ => build_pool_for_service_with_wait(&payload.url, &payload.service, payload.wait_for_ready).await?,
     };
     let service_desc = pool
         .get_service_by_name(&payload.service)
@@ -511,8 +680,11 @@ pub async fn grpc_invoke_unary(payload: GrpcInvokeRequest) -> Result<GrpcInvokeR
 
     let started = Instant::now();
 
-    let channel = connect(&payload.url).await?;
-    let mut grpc_client = tonic::client::Grpc::new(channel);
+    let channel = connect_for_request(&payload.url, payload.wait_for_ready).await?;
+    let mut grpc_client = tonic::client::Grpc::new(channel).max_decoding_message_size(max_response_size);
+    if let Some(encoding) = compression {
+        grpc_client = grpc_client.send_compressed(encoding).accept_compressed(encoding);
+    }
     grpc_client
         .ready()
         .await
@@ -522,6 +694,7 @@ pub async fn grpc_invoke_unary(payload: GrpcInvokeRequest) -> Result<GrpcInvokeR
     let path = http::uri::PathAndQuery::from_str(&path_str).map_err(|e| format!("invalid method path: {e}"))?;
 
     let mut request = Request::new(message);
+    request.set_timeout(deadline.saturating_duration_since(Instant::now()));
     for (k, v) in &payload.metadata {
         let key = tonic::metadata::MetadataKey::from_bytes(k.to_lowercase().as_bytes())
             .map_err(|e| format!("invalid metadata key {k}: {e}"))?;
@@ -565,6 +738,17 @@ pub async fn grpc_invoke_unary(payload: GrpcInvokeRequest) -> Result<GrpcInvokeR
     })
 }
 
+#[tauri::command]
+pub async fn grpc_invoke_unary(payload: GrpcInvokeRequest) -> Result<GrpcInvokeResponse, String> {
+    let timeout = request_timeout(payload.timeout_ms);
+    let max_response_size = max_response_size(payload.max_response_size_bytes)?;
+    let compression = compression_encoding(payload.compression.as_deref())?;
+    let deadline = Instant::now() + timeout;
+    tokio::time::timeout(timeout, invoke_unary_inner(payload, deadline, max_response_size, compression))
+        .await
+        .map_err(|_| format!("gRPC request deadline exceeded after {} ms", timeout.as_millis()))?
+}
+
 #[cfg(test)]
 mod schema_tests {
     use super::*;
@@ -572,6 +756,14 @@ mod schema_tests {
     const TEST_PROTO: &str = r#"
         syntax = "proto3";
         package test;
+
+        import "google/protobuf/any.proto";
+        import "google/protobuf/duration.proto";
+        import "google/protobuf/empty.proto";
+        import "google/protobuf/field_mask.proto";
+        import "google/protobuf/struct.proto";
+        import "google/protobuf/timestamp.proto";
+        import "google/protobuf/wrappers.proto";
 
         enum Status {
             STATUS_UNKNOWN = 0;
@@ -592,6 +784,20 @@ mod schema_tests {
             repeated string tags = 6;
             Node tree = 7;
             map<string, string> metadata = 8;
+            oneof contact {
+                string email = 9;
+                string phone = 10;
+            }
+            optional string nickname = 11;
+            google.protobuf.Timestamp created_at = 12;
+            google.protobuf.Duration timeout = 13;
+            google.protobuf.FieldMask field_mask = 14;
+            google.protobuf.Int64Value wrapped_count = 15;
+            google.protobuf.Struct arbitrary_object = 16;
+            google.protobuf.ListValue arbitrary_list = 17;
+            google.protobuf.Value arbitrary_value = 18;
+            google.protobuf.Empty empty_value = 19;
+            google.protobuf.Any any_value = 20;
         }
 
         service PetService {
@@ -623,6 +829,22 @@ mod schema_tests {
         assert_eq!(obj["tags"], json!([""]));
         assert_eq!(obj["metadata"], json!({}), "map fields placeholder as an empty object");
         assert!(obj["tree"].is_object(), "nested message field recurses into an object");
+        assert!(!obj.contains_key("email"), "oneof alternatives must be omitted from the default template");
+        assert!(!obj.contains_key("phone"), "oneof alternatives must be omitted from the default template");
+        assert_eq!(obj["nickname"], json!(""), "proto3 optional fields are not user-facing oneofs");
+        assert_eq!(obj["createdAt"], json!("1970-01-01T00:00:00Z"));
+        assert_eq!(obj["timeout"], json!("0s"));
+        assert_eq!(obj["fieldMask"], json!(""));
+        assert_eq!(obj["wrappedCount"], json!("0"));
+        assert_eq!(obj["arbitraryObject"], json!({}));
+        assert_eq!(obj["arbitraryList"], json!([]));
+        assert_eq!(obj["arbitraryValue"], serde_json::Value::Null);
+        assert_eq!(obj["emptyValue"], json!({}));
+        assert!(!obj.contains_key("anyValue"), "Any needs a concrete @type and must be omitted by default");
+
+        let template_json = serde_json::to_string(&template).unwrap();
+        let mut deserializer = serde_json::Deserializer::from_str(&template_json);
+        DynamicMessage::deserialize(input.clone(), &mut deserializer).expect("the generated template must deserialize as its input message type");
 
         let fields = input.fields().map(|f| field_schema(&f, &ancestors)).collect::<Vec<_>>();
         let status_field = fields.iter().find(|f| f.name == "status").unwrap();
@@ -632,6 +854,18 @@ mod schema_tests {
         let tree_field = fields.iter().find(|f| f.name == "tree").unwrap();
         assert_eq!(tree_field.kind, "message");
         assert!(tree_field.fields.iter().any(|f| f.name == "label"));
+
+        let email_field = fields.iter().find(|f| f.name == "email").unwrap();
+        assert_eq!(email_field.type_name, "string");
+        assert_eq!(email_field.oneof.as_deref(), Some("contact"));
+        let phone_field = fields.iter().find(|f| f.name == "phone").unwrap();
+        assert_eq!(phone_field.oneof.as_deref(), Some("contact"));
+        let nickname_field = fields.iter().find(|f| f.name == "nickname").unwrap();
+        assert_eq!(nickname_field.oneof, None, "synthetic optional oneofs must stay hidden");
+
+        let serialized = serde_json::to_value(email_field).unwrap();
+        assert_eq!(serialized["typeName"], "string");
+        assert_eq!(serialized["oneof"], "contact");
     }
 
     #[test]
@@ -642,5 +876,37 @@ mod schema_tests {
         // Node.children is `repeated Node`, must terminate instead of recursing forever.
         let template = message_template(&node, &ancestors);
         assert!(template.is_object());
+    }
+
+    #[test]
+    fn invoke_settings_use_safe_defaults_and_validate_bounds() {
+        assert_eq!(request_timeout(None), Duration::from_millis(DEFAULT_REQUEST_TIMEOUT_MS));
+        assert_eq!(request_timeout(Some(0)), Duration::from_millis(DEFAULT_REQUEST_TIMEOUT_MS));
+        assert_eq!(request_timeout(Some(1_500)), Duration::from_millis(1_500));
+
+        assert_eq!(max_response_size(None).unwrap(), DEFAULT_MAX_RESPONSE_SIZE);
+        assert!(max_response_size(Some(0)).is_err());
+        assert!(max_response_size(Some(MAX_RESPONSE_SIZE + 1)).is_err());
+        assert_eq!(max_response_size(Some(8 * 1024 * 1024)).unwrap(), 8 * 1024 * 1024);
+
+        assert!(compression_encoding(None).unwrap().is_none());
+        assert!(matches!(compression_encoding(Some("gzip")), Ok(Some(CompressionEncoding::Gzip))));
+        assert!(compression_encoding(Some("brotli")).is_err());
+    }
+
+    #[test]
+    fn older_invoke_payloads_deserialize_without_settings() {
+        let payload: GrpcInvokeRequest = serde_json::from_value(json!({
+            "url": "grpc://localhost:50051",
+            "service": "test.PetService",
+            "method": "CreatePet",
+            "message_json": "{}"
+        }))
+        .expect("legacy payload should deserialize");
+
+        assert_eq!(payload.timeout_ms, None);
+        assert!(!payload.wait_for_ready);
+        assert_eq!(payload.compression, None);
+        assert_eq!(payload.max_response_size_bytes, None);
     }
 }

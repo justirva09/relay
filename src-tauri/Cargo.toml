@@ -21,7 +21,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
-tonic = { version = "0.12", features = ["tls", "tls-roots"] }
+tonic = { version = "0.12", features = ["tls", "tls-roots", "gzip"] }
 tonic-reflection = "0.12"
 prost = "0.14"
 prost-types = "0.14"

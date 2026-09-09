@@ -5,6 +5,7 @@ import { mergedVariables } from "../lib/useSendRequest";
 import KeyValueEditor, { ValueInput } from "./KeyValueEditor";
 import FormDataEditor from "./FormDataEditor";
 import CodeEditor from "./CodeEditor";
+import ResizableCodeEditor from "./ResizableCodeEditor";
 import CodeSnippetModal from "./CodeSnippetModal";
 import { PM_PRE_COMPLETIONS, PM_TEST_COMPLETIONS } from "../lib/pmCompletions";
 import { useWorkspace } from "../store";
@@ -532,12 +533,15 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
                     </button>
                   </div>
                 )}
-                <CodeEditor
+                <ResizableCodeEditor
                   value={draft.bodyText}
                   onChange={(v) => onChange({ bodyText: v })}
                   placeholder={draft.bodyMode === "json" ? '{\n  "key": "value",\n  "token": "{{token}}"\n}' : "raw text body"}
                   variables={variableGroups}
-                  className="h-64 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
+                  storageKey="relay-http-request-body-height"
+                  defaultHeight={264}
+                  resizeLabel="HTTP request body editor"
+                  className="bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
                 />
               </div>
             )}

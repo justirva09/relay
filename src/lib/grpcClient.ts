@@ -52,7 +52,9 @@ export function listProtoServiceFiles(files: ProtoFileInput[]): Promise<string[]
 export interface ProtoFieldSchema {
   name: string;
   kind: "string" | "number" | "bool" | "enum" | "message" | "map";
+  typeName: string;
   repeated: boolean;
+  oneof?: string;
   fields?: ProtoFieldSchema[];
   enumValues?: string[];
 }
@@ -84,6 +86,10 @@ export async function invokeGrpcUnary(payload: {
   method: string;
   messageJson: string;
   metadata: [string, string][];
+  timeoutMs: number;
+  waitForReady: boolean;
+  compression: "none" | "gzip";
+  maxResponseSizeBytes: number;
   protoFiles?: ProtoFileInput[];
   entryFile?: string;
 }): Promise<GrpcInvokeResult> {
@@ -94,6 +100,10 @@ export async function invokeGrpcUnary(payload: {
       method: payload.method,
       message_json: payload.messageJson,
       metadata: payload.metadata,
+      timeout_ms: payload.timeoutMs,
+      wait_for_ready: payload.waitForReady,
+      compression: payload.compression,
+      max_response_size_bytes: payload.maxResponseSizeBytes,
       proto_files: payload.protoFiles,
       entry_file: payload.entryFile,
     },
