@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "grpc:test-server": "node scripts/grpc-test-server.mjs",
+    "grpc:test-client": "node scripts/grpc-test-client.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri"

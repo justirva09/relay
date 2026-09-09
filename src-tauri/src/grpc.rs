@@ -5,7 +5,11 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::str::FromStr;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tauri::ipc::Channel as IpcChannel;
+use tauri::State;
+use tokio::sync::watch;
 use tonic::codec::{Codec, CompressionEncoding, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
@@ -62,6 +66,28 @@ pub struct GrpcInvokeResponse {
     pub json: String,
     pub metadata: Vec<(String, String)>,
     pub duration_ms: u64,
+}
+
+#[derive(Default)]
+pub struct GrpcStreamState {
+    cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum GrpcStreamEvent {
+    Metadata { metadata: Vec<(String, String)> },
+    Message { json: String },
+}
+
+#[derive(Serialize)]
+pub struct GrpcStreamResponse {
+    pub json: String,
+    pub metadata: Vec<(String, String)>,
+    pub duration_ms: u64,
+    pub size_bytes: usize,
+    pub message_count: usize,
+    pub cancelled: bool,
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
@@ -427,6 +453,8 @@ pub struct ProtoFieldSchema {
     pub fields: Vec<ProtoFieldSchema>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub enum_values: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub map_value: Option<Box<ProtoFieldSchema>>,
 }
 
 #[derive(Serialize)]
@@ -467,6 +495,13 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
     };
 
     if field.is_map() {
+        let map_value = match field.kind() {
+            Kind::Message(entry) => Some(Box::new(field_schema(
+                &entry.map_entry_value_field(),
+                ancestors,
+            ))),
+            _ => None,
+        };
         return ProtoFieldSchema {
             name,
             kind: "map".to_string(),
@@ -475,6 +510,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
             oneof,
             fields: vec![],
             enum_values: vec![],
+            map_value,
         };
     }
 
@@ -490,6 +526,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
                     oneof,
                     fields: vec![],
                     enum_values: vec![],
+                    map_value: None,
                 }
             } else {
                 let mut next = ancestors.clone();
@@ -503,6 +540,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
                     oneof,
                     fields,
                     enum_values: vec![],
+                    map_value: None,
                 }
             }
         }
@@ -514,6 +552,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
             oneof,
             fields: vec![],
             enum_values: e.values().map(|v| v.name().to_string()).collect(),
+            map_value: None,
         },
         Kind::Bool => ProtoFieldSchema {
             name,
@@ -523,6 +562,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
             oneof,
             fields: vec![],
             enum_values: vec![],
+            map_value: None,
         },
         Kind::String | Kind::Bytes => ProtoFieldSchema {
             name,
@@ -532,6 +572,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
             oneof,
             fields: vec![],
             enum_values: vec![],
+            map_value: None,
         },
         _ => ProtoFieldSchema {
             name,
@@ -541,6 +582,7 @@ fn field_schema(field: &FieldDescriptor, ancestors: &HashSet<String>) -> ProtoFi
             oneof,
             fields: vec![],
             enum_values: vec![],
+            map_value: None,
         },
     }
 }
@@ -650,6 +692,33 @@ pub async fn grpc_method_schema(
     Ok(GrpcMethodSchema { template, fields })
 }
 
+fn metadata_entries(metadata: &tonic::metadata::MetadataMap) -> Vec<(String, String)> {
+    metadata
+        .iter()
+        .filter_map(|kv| match kv {
+            tonic::metadata::KeyAndValueRef::Ascii(k, v) => {
+                Some((k.to_string(), v.to_str().unwrap_or("<invalid>").to_string()))
+            }
+            tonic::metadata::KeyAndValueRef::Binary(k, v) => Some((
+                k.to_string(),
+                format!(
+                    "<binary, {} bytes>",
+                    v.to_bytes().map(|b| b.len()).unwrap_or(0)
+                ),
+            )),
+        })
+        .collect()
+}
+
+fn dynamic_message_json(message: &DynamicMessage) -> Result<String, String> {
+    let mut buf = Vec::new();
+    let mut serializer = serde_json::Serializer::pretty(&mut buf);
+    message
+        .serialize_with_options(&mut serializer, &prost_reflect::SerializeOptions::new())
+        .map_err(|e| format!("failed to serialize response: {e}"))?;
+    String::from_utf8(buf).map_err(|e| e.to_string())
+}
+
 async fn invoke_unary_inner(
     payload: GrpcInvokeRequest,
     deadline: Instant,
@@ -658,7 +727,10 @@ async fn invoke_unary_inner(
 ) -> Result<GrpcInvokeResponse, String> {
     let pool = match (&payload.proto_files, &payload.entry_file) {
         (Some(files), Some(entry_file)) => build_pool_from_proto_files(files, entry_file)?,
-        _ => build_pool_for_service_with_wait(&payload.url, &payload.service, payload.wait_for_ready).await?,
+        _ => {
+            build_pool_for_service_with_wait(&payload.url, &payload.service, payload.wait_for_ready)
+                .await?
+        }
     };
     let service_desc = pool
         .get_service_by_name(&payload.service)
@@ -711,28 +783,12 @@ async fn invoke_unary_inner(
 
     let duration_ms = started.elapsed().as_millis() as u64;
 
-    let metadata = response
-        .metadata()
-        .iter()
-        .filter_map(|kv| match kv {
-            tonic::metadata::KeyAndValueRef::Ascii(k, v) => {
-                Some((k.to_string(), v.to_str().unwrap_or("<invalid>").to_string()))
-            }
-            tonic::metadata::KeyAndValueRef::Binary(k, v) => {
-                Some((k.to_string(), format!("<binary, {} bytes>", v.to_bytes().map(|b| b.len()).unwrap_or(0))))
-            }
-        })
-        .collect();
+    let metadata = metadata_entries(response.metadata());
 
     let dynamic_response = response.into_inner();
-    let mut buf = Vec::new();
-    let mut serializer = serde_json::Serializer::pretty(&mut buf);
-    dynamic_response
-        .serialize_with_options(&mut serializer, &prost_reflect::SerializeOptions::new())
-        .map_err(|e| format!("failed to serialize response: {e}"))?;
 
     Ok(GrpcInvokeResponse {
-        json: String::from_utf8(buf).map_err(|e| e.to_string())?,
+        json: dynamic_message_json(&dynamic_response)?,
         metadata,
         duration_ms,
     })
@@ -747,6 +803,183 @@ pub async fn grpc_invoke_unary(payload: GrpcInvokeRequest) -> Result<GrpcInvokeR
     tokio::time::timeout(timeout, invoke_unary_inner(payload, deadline, max_response_size, compression))
         .await
         .map_err(|_| format!("gRPC request deadline exceeded after {} ms", timeout.as_millis()))?
+}
+
+async fn invoke_server_stream_inner(
+    payload: GrpcInvokeRequest,
+    deadline: Instant,
+    max_response_size: usize,
+    compression: Option<CompressionEncoding>,
+    on_event: IpcChannel<GrpcStreamEvent>,
+) -> Result<GrpcStreamResponse, String> {
+    let started = Instant::now();
+    let pool = match (&payload.proto_files, &payload.entry_file) {
+        (Some(files), Some(entry_file)) => build_pool_from_proto_files(files, entry_file)?,
+        _ => build_pool_for_service_with_wait(&payload.url, &payload.service, payload.wait_for_ready).await?,
+    };
+    let service_desc = pool
+        .get_service_by_name(&payload.service)
+        .ok_or_else(|| format!("service {} not found", payload.service))?;
+    let method_desc = service_desc
+        .methods()
+        .find(|method| method.name() == payload.method)
+        .ok_or_else(|| format!("method {} not found on {}", payload.method, payload.service))?;
+    if method_desc.is_client_streaming() || !method_desc.is_server_streaming() {
+        return Err(format!(
+            "{}.{} is not a server-streaming method",
+            payload.service, payload.method
+        ));
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_str(&payload.message_json);
+    let message = DynamicMessage::deserialize(method_desc.input(), &mut deserializer)
+        .map_err(|e| format!("invalid message JSON: {e}"))?;
+    deserializer
+        .end()
+        .map_err(|e| format!("invalid message JSON: {e}"))?;
+
+    let channel = connect_for_request(&payload.url, payload.wait_for_ready).await?;
+    let mut grpc_client =
+        tonic::client::Grpc::new(channel).max_decoding_message_size(max_response_size);
+    if let Some(encoding) = compression {
+        grpc_client = grpc_client
+            .send_compressed(encoding)
+            .accept_compressed(encoding);
+    }
+    grpc_client
+        .ready()
+        .await
+        .map_err(|e| format!("connection not ready: {e}"))?;
+
+    let path_str = format!("/{}/{}", payload.service, payload.method);
+    let path = http::uri::PathAndQuery::from_str(&path_str)
+        .map_err(|e| format!("invalid method path: {e}"))?;
+    let mut request = Request::new(message);
+    request.set_timeout(deadline.saturating_duration_since(Instant::now()));
+    for (key, value) in &payload.metadata {
+        let metadata_key = tonic::metadata::MetadataKey::from_bytes(key.to_lowercase().as_bytes())
+            .map_err(|e| format!("invalid metadata key {key}: {e}"))?;
+        let metadata_value = tonic::metadata::MetadataValue::try_from(value.as_str())
+            .map_err(|e| format!("invalid metadata value for {key}: {e}"))?;
+        request.metadata_mut().insert(metadata_key, metadata_value);
+    }
+
+    let codec = DynamicCodec {
+        output_desc: method_desc.output(),
+    };
+    let response = grpc_client
+        .server_streaming(request, path, codec)
+        .await
+        .map_err(|status| format!("gRPC error ({:?}): {}", status.code(), status.message()))?;
+    let mut metadata = metadata_entries(response.metadata());
+    on_event
+        .send(GrpcStreamEvent::Metadata {
+            metadata: metadata.clone(),
+        })
+        .map_err(|_| "gRPC stream listener closed".to_string())?;
+    let mut stream = response.into_inner();
+    let mut messages = Vec::new();
+
+    loop {
+        let next = stream
+            .message()
+            .await
+            .map_err(|status| format!("gRPC error ({:?}): {}", status.code(), status.message()))?;
+        let Some(message) = next else { break };
+        let json = dynamic_message_json(&message)?;
+        on_event
+            .send(GrpcStreamEvent::Message { json: json.clone() })
+            .map_err(|_| "gRPC stream listener closed".to_string())?;
+        messages.push(serde_json::from_str::<serde_json::Value>(&json).map_err(|e| e.to_string())?);
+    }
+
+    if let Some(trailers) = stream
+        .trailers()
+        .await
+        .map_err(|status| format!("gRPC error ({:?}): {}", status.code(), status.message()))?
+    {
+        metadata.extend(metadata_entries(&trailers));
+    }
+
+    let json = serde_json::to_string_pretty(&messages).map_err(|e| e.to_string())?;
+    Ok(GrpcStreamResponse {
+        size_bytes: json.len(),
+        message_count: messages.len(),
+        json,
+        metadata,
+        duration_ms: started.elapsed().as_millis() as u64,
+        cancelled: false,
+    })
+}
+
+#[tauri::command]
+pub async fn grpc_invoke_server_stream(
+    request_id: String,
+    payload: GrpcInvokeRequest,
+    on_event: IpcChannel<GrpcStreamEvent>,
+    state: State<'_, GrpcStreamState>,
+) -> Result<GrpcStreamResponse, String> {
+    let timeout = request_timeout(payload.timeout_ms);
+    let max_response_size = max_response_size(payload.max_response_size_bytes)?;
+    let compression = compression_encoding(payload.compression.as_deref())?;
+    let deadline = Instant::now() + timeout;
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    {
+        let mut cancellations = state
+            .cancellations
+            .lock()
+            .map_err(|_| "gRPC cancellation state is unavailable")?;
+        if cancellations.contains_key(&request_id) {
+            return Err("a gRPC stream with this request id is already running".to_string());
+        }
+        cancellations.insert(request_id.clone(), cancel_tx);
+    }
+
+    let started = Instant::now();
+    let operation = tokio::time::timeout(
+        timeout,
+        invoke_server_stream_inner(payload, deadline, max_response_size, compression, on_event),
+    );
+    tokio::pin!(operation);
+    let result = tokio::select! {
+        result = &mut operation => match result {
+            Ok(result) => result,
+            Err(_) => Err(format!("gRPC request deadline exceeded after {} ms", timeout.as_millis())),
+        },
+        changed = cancel_rx.changed() => {
+            if changed.is_ok() && *cancel_rx.borrow() {
+                Ok(GrpcStreamResponse {
+                    json: "[]".to_string(),
+                    metadata: vec![],
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    size_bytes: 2,
+                    message_count: 0,
+                    cancelled: true,
+                })
+            } else {
+                Err("gRPC cancellation channel closed".to_string())
+            }
+        }
+    };
+    if let Ok(mut cancellations) = state.cancellations.lock() {
+        cancellations.remove(&request_id);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn grpc_cancel_stream(
+    request_id: String,
+    state: State<'_, GrpcStreamState>,
+) -> Result<bool, String> {
+    let cancellations = state
+        .cancellations
+        .lock()
+        .map_err(|_| "gRPC cancellation state is unavailable")?;
+    Ok(cancellations
+        .get(&request_id)
+        .map(|cancel| cancel.send(true).is_ok())
+        .unwrap_or(false))
 }
 
 #[cfg(test)]
@@ -850,6 +1083,11 @@ mod schema_tests {
         let status_field = fields.iter().find(|f| f.name == "status").unwrap();
         assert_eq!(status_field.kind, "enum");
         assert_eq!(status_field.enum_values, vec!["STATUS_UNKNOWN", "STATUS_ACTIVE"]);
+
+        let metadata_field = fields.iter().find(|f| f.name == "metadata").unwrap();
+        let map_value = metadata_field.map_value.as_ref().expect("map value schema");
+        assert_eq!(map_value.kind, "string");
+        assert_eq!(map_value.type_name, "string");
 
         let tree_field = fields.iter().find(|f| f.name == "tree").unwrap();
         assert_eq!(tree_field.kind, "message");

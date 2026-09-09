@@ -8,6 +8,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(mock_server::MockServerState::default())
+        .manage(grpc::GrpcStreamState::default())
         .manage(perf::PerfState::default())
         .invoke_handler(tauri::generate_handler![
             commands::http_request,
@@ -38,6 +39,8 @@ fn main() {
             grpc::list_proto_service_files,
             grpc::grpc_method_schema,
             grpc::grpc_invoke_unary,
+            grpc::grpc_invoke_server_stream,
+            grpc::grpc_cancel_stream,
             mock_server::start_mock_server,
             mock_server::stop_mock_server,
             mock_server::mock_server_status,

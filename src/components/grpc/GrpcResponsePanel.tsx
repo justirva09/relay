@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { GrpcLogEntry, GrpcResponseSummary } from "../../types";
+import { GrpcLogEntry, GrpcMethodType, GrpcResponseSummary } from "../../types";
 import { registerAction, setActiveSearchRegion } from "../../lib/keybindings";
 import { useTextHighlight } from "../../lib/useTextHighlight";
 import CodeView from "../CodeView";
@@ -84,7 +84,15 @@ function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
   return (
     <div className="h-full flex flex-col relative" onMouseEnter={() => setActiveSearchRegion("response")}>
       <div className="px-4 py-2.5 flex items-center gap-3 text-[12.5px] font-mono shrink-0">
-        {response.error ? (
+        {response.cancelled ? (
+          <>
+            <span className="px-2 py-0.5 rounded-md text-[13px] font-mono font-semibold ring-1 text-amber-400 bg-amber-400/10 ring-amber-400/30">CANCELLED</span>
+            {response.messageCount !== undefined && (
+              <span className="text-th-text-2">{response.messageCount} message{response.messageCount === 1 ? "" : "s"}</span>
+            )}
+            {response.durationMs !== null && <span className="text-th-text-2">{response.durationMs}ms</span>}
+          </>
+        ) : response.error ? (
           <>
             <span className="px-2 py-0.5 rounded-md text-[13px] font-mono font-semibold ring-1 text-rose-400 bg-rose-400/10 ring-rose-400/30">{errorBadge(response.error)}</span>
             <span className="text-th-text-2">gRPC call failed</span>
@@ -95,6 +103,12 @@ function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
             {response.durationMs !== null && <span className="text-th-text-2">{response.durationMs}ms</span>}
             <span className="text-th-text-4">·</span>
             <span className="text-th-text-2">{bytesToSize(response.sizeBytes)}</span>
+            {response.messageCount !== undefined && (
+              <>
+                <span className="text-th-text-4">·</span>
+                <span className="text-th-text-2">{response.messageCount} message{response.messageCount === 1 ? "" : "s"}</span>
+              </>
+            )}
           </>
         )}
         {response.compression === "gzip" && (
@@ -265,23 +279,37 @@ function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
   );
 }
 
-export default function GrpcResponsePanel({ log, streaming, lastResponse }: {
+export default function GrpcResponsePanel({ log, streaming, methodType, lastResponse }: {
   log: GrpcLogEntry[];
   streaming: boolean;
+  methodType: GrpcMethodType;
   lastResponse: GrpcResponseSummary | null;
 }) {
   const [mode, setMode] = useState<"response" | "log">("response");
 
+  useEffect(() => {
+    if (streaming) setMode(methodType === "unary" ? "response" : "log");
+  }, [streaming, methodType]);
+
   if (log.length === 0 && !streaming) {
     return (
-      <div className="h-full grid place-items-center text-th-text-4 text-[13px] font-mono">
+      <div
+        className="h-full grid place-items-center text-th-text-4 text-[13px] font-mono"
+        onMouseEnter={() => setActiveSearchRegion("response")}
+        onMouseDown={() => setActiveSearchRegion("response")}
+      >
         response will appear here
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div
+      className="h-full flex flex-col"
+      onMouseEnter={() => setActiveSearchRegion("response")}
+      onMouseDownCapture={() => setActiveSearchRegion("response")}
+      onFocusCapture={() => setActiveSearchRegion("response")}
+    >
       <div className="px-4 pt-2.5 flex gap-1.5 shrink-0">
         {(["response", "log"] as const).map((m) => (
           <button
