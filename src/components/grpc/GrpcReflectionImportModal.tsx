@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { GrpcCatalogService, listGrpcServices } from "../../lib/grpcClient";
 import { GrpcApiImportService } from "../../store/useTreeActions";
 import { GrpcMethodType } from "../../types";
+import { substituteVars } from "../../lib/pm";
 
 const METHOD_LABEL: Record<GrpcMethodType, string> = {
   unary: "unary",
@@ -25,9 +26,11 @@ function suggestedApiName(value: string): string {
 export default function GrpcReflectionImportModal({
   onImport,
   onClose,
+  variableValues,
 }: {
   onImport: (apiName: string, url: string, services: GrpcApiImportService[]) => void;
   onClose: () => void;
+  variableValues: Record<string, string>;
 }) {
   const [url, setUrl] = useState("grpc://localhost:50051");
   const [apiName, setApiName] = useState("localhost:50051");
@@ -51,7 +54,7 @@ export default function GrpcReflectionImportModal({
   );
 
   const discover = async () => {
-    const endpoint = url.trim();
+    const endpoint = (substituteVars(url, variableValues) ?? url).trim();
     if (!endpoint || loading) return;
     setLoading(true);
     setError(null);

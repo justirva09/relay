@@ -9,6 +9,7 @@ import { useLayout } from "../lib/layout";
 import { TreeItem } from "./sidebar/TreeItem";
 import { AddRequestDropdown } from "./sidebar/AddRequestDropdown";
 import { DropInfo, setSuppressNextClick } from "./sidebar/shared";
+import { workspaceVariableValues } from "../lib/pm";
 
 export { METHOD_COLOR } from "./sidebar/shared";
 
@@ -536,6 +537,7 @@ export default function Sidebar() {
 
       {grpcImportTarget && (
         <GrpcReflectionImportModal
+          variableValues={workspaceVariableValues(workspace)}
           onClose={() => setGrpcImportTarget(null)}
           onImport={(apiName, url, services) => {
             importGrpcApi(grpcImportTarget.parentId, apiName, url, services);

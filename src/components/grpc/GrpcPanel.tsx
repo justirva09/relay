@@ -6,6 +6,8 @@ import ResizableCodeEditor from "../ResizableCodeEditor";
 import KeyValueEditor from "../KeyValueEditor";
 import GrpcServicePicker from "./GrpcServicePicker";
 import FloatingMenu from "../FloatingMenu";
+import { useWorkspace } from "../../store";
+import { substituteVars, workspaceVariableValues } from "../../lib/pm";
 import ToggleSwitch from "../ToggleSwitch";
 
 function indent(text: string): string {
@@ -269,6 +271,9 @@ function randomGrpcSampleSeed(): number {
 }
 
 export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel, protoFiles, onImportProto, onRemoveProto }: Props) {
+  const { workspace } = useWorkspace();
+  const variableValues = workspaceVariableValues(workspace);
+  const resolvedUrl = substituteVars(draft.url, variableValues) ?? draft.url;
   const [tab, setTab] = useState<"message" | "metadata" | "settings" | "definition">("message");
   const [serviceFiles, setServiceFiles] = useState<Set<string>>(new Set());
   const [schemaFields, setSchemaFields] = useState<ProtoFieldSchema[] | undefined>(undefined);
@@ -293,7 +298,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
     setSchemaFields(undefined);
     const canUseImportedProto = draft.protoSource === "imported" && !!draft.activeProtoFile;
     fetchGrpcMethodSchema({
-      url: draft.url,
+      url: resolvedUrl,
       service,
       method,
       protoFiles: canUseImportedProto ? protoFiles : undefined,
@@ -317,7 +322,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
     let cancelled = false;
     const canUseImportedProto = draft.protoSource === "imported" && !!draft.activeProtoFile;
     fetchGrpcMethodSchema({
-      url: draft.url,
+      url: resolvedUrl,
       service: draft.service,
       method: draft.method,
       protoFiles: canUseImportedProto ? protoFiles : undefined,
@@ -331,7 +336,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.service, draft.method, draft.protoSource, draft.activeProtoFile]);
+  }, [draft.service, draft.method, draft.protoSource, draft.activeProtoFile, resolvedUrl]);
 
   useEffect(() => {
     if (protoFiles.length === 0) {
@@ -379,7 +384,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
           />
         </div>
         <GrpcMethodDropdown
-          url={draft.url}
+          url={resolvedUrl}
           protoSource={draft.protoSource}
           protoFiles={protoFiles}
           activeProtoFile={draft.activeProtoFile}

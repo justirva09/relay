@@ -1,3 +1,5 @@
+import type { Workspace } from "../types";
+
 export interface ScriptRequest {
   method: string;
   url: string;
@@ -22,6 +24,21 @@ export interface TestResultDraft {
 export function substituteVars(text: string | undefined, vars: Record<string, string>): string | undefined {
   if (typeof text !== "string") return text;
   return text.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key) => (vars[key] !== undefined ? String(vars[key]) : `{{${key}}}`));
+}
+
+// Resolve workspace globals with the active environment layered on top.
+// Keeping this as a value map makes it reusable outside the HTTP send path
+// (for example gRPC discovery, schema loading, and invocation).
+export function workspaceVariableValues(workspace: Workspace): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const row of workspace.variables) {
+    if (row.key.trim()) values[row.key] = row.value;
+  }
+  const activeEnvironment = workspace.environments.find((environment) => environment.id === workspace.activeEnvironmentId);
+  for (const row of activeEnvironment?.variables ?? []) {
+    if (row.key.trim()) values[row.key] = row.value;
+  }
+  return values;
 }
 
 // Replaces Postman-style :paramName path segments with their configured

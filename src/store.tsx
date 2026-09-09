@@ -12,6 +12,7 @@ import { useResponseCache } from "./store/useResponseCache";
 import { useEnvironments } from "./store/useEnvironments";
 import { GrpcApiImportService, useTreeActions } from "./store/useTreeActions";
 import { useImportExport } from "./store/useImportExport";
+import { substituteVars, workspaceVariableValues } from "./lib/pm";
 
 interface Ctx {
   workspace: Workspace;
@@ -499,6 +500,16 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     async (id: string) => {
       const tab = tabs.find((item) => item.nodeId === id);
       if (!tab || tab.kind !== "grpc") return;
+      const variables = workspaceVariableValues(workspace);
+      const resolvedUrl = substituteVars(tab.draft.url, variables) ?? tab.draft.url;
+      const resolvedMessageJson = substituteVars(tab.draft.messageJson, variables) ?? tab.draft.messageJson;
+      const resolvedMetadata: [string, string][] = tab.draft.metadata
+        .filter((item) => item.enabled && item.key.trim())
+        .map((item): [string, string] => [
+          substituteVars(item.key, variables) ?? item.key,
+          substituteVars(item.value, variables) ?? item.value,
+        ])
+        .filter(([key]) => key.trim());
       const cancelRef: { current: boolean; requestId?: string } = { current: false };
       grpcCancelRefs.current.set(id, cancelRef);
       setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: true, log: [], lastResponse: null } : x)));
@@ -507,7 +518,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         tab.draft.protoSource === "imported" && !!tab.draft.activeProtoFile;
 
       if ((tab.draft.protoSource === "reflection" || canUseImportedProto) && tab.draft.methodType === "server-stream") {
-        const sentEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "sent", json: tab.draft.messageJson };
+        const sentEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "sent", json: resolvedMessageJson };
         setTabs((current) =>
           current.map((item) => (item.nodeId === id && item.kind === "grpc" ? { ...item, log: [sentEntry] } : item))
         );
@@ -516,17 +527,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         const receivedMessages: string[] = [];
         let initialMetadata: [string, string][] = [];
         try {
-          const metadata: [string, string][] = tab.draft.metadata
-            .filter((item) => item.enabled && item.key.trim())
-            .map((item) => [item.key, item.value]);
           const result = await invokeGrpcServerStream(
             requestId,
             {
-              url: tab.draft.url,
+              url: resolvedUrl,
               service: tab.draft.service,
               method: tab.draft.method,
-              messageJson: tab.draft.messageJson,
-              metadata,
+              messageJson: resolvedMessageJson,
+              metadata: resolvedMetadata,
               timeoutMs: tab.draft.settings.timeoutMs,
               waitForReady: tab.draft.settings.waitForReady,
               compression: tab.draft.settings.compression,
@@ -595,18 +603,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       }
 
       if ((tab.draft.protoSource === "reflection" || canUseImportedProto) && tab.draft.methodType === "unary") {
-        const sentEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "sent", json: tab.draft.messageJson };
+        const sentEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "sent", json: resolvedMessageJson };
         try {
-          const metadata: [string, string][] = tab.draft.metadata
-            .filter((m) => m.enabled && m.key.trim())
-            .map((m) => [m.key, m.value]);
-
           const result = await invokeGrpcUnary({
-            url: tab.draft.url,
+            url: resolvedUrl,
             service: tab.draft.service,
             method: tab.draft.method,
-            messageJson: tab.draft.messageJson,
-            metadata,
+            messageJson: resolvedMessageJson,
+            metadata: resolvedMetadata,
             timeoutMs: tab.draft.settings.timeoutMs,
             waitForReady: tab.draft.settings.waitForReady,
             compression: tab.draft.settings.compression,
@@ -649,7 +653,16 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       }
 
       await simulateGrpcCall(
-        tab.draft,
+        {
+          ...tab.draft,
+          url: resolvedUrl,
+          messageJson: resolvedMessageJson,
+          metadata: tab.draft.metadata.map((item) => ({
+            ...item,
+            key: substituteVars(item.key, variables) ?? item.key,
+            value: substituteVars(item.value, variables) ?? item.value,
+          })),
+        },
         (entry) => {
           if (cancelRef.current) return;
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [...x.log, entry] } : x)));
@@ -659,7 +672,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: false } : x)));
       grpcCancelRefs.current.delete(id);
     },
-    [tabs, workspace.protoLibrary, cacheGrpcResponse]
+    [tabs, workspace, cacheGrpcResponse]
   );
 
   const cancelGrpcTab = useCallback(async (id: string) => {
