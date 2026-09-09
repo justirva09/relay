@@ -1,4 +1,5 @@
 import React from "react";
+import { useEffect, useRef } from "react";
 import { GrpcLogEntry } from "../../types";
 import { JsonTree, isJson } from "../JsonTree";
 
@@ -19,6 +20,13 @@ function formatTime(ts: number): string {
 }
 
 export default function GrpcResponseLog({ log, streaming }: { log: GrpcLogEntry[]; streaming: boolean }) {
+  const endRef = useRef<HTMLDivElement>(null);
+  const receivedCount = log.filter((entry) => entry.direction === "received").length;
+
+  useEffect(() => {
+    if (streaming) endRef.current?.scrollIntoView({ block: "nearest" });
+  }, [log.length, streaming]);
+
   if (log.length === 0 && !streaming) {
     return (
       <div className="h-full grid place-items-center text-th-text-4 text-[13px] font-mono">
@@ -31,9 +39,9 @@ export default function GrpcResponseLog({ log, streaming }: { log: GrpcLogEntry[
     <div className="h-full flex flex-col">
       <div className="px-4 py-2.5 flex items-center gap-3 text-[12.5px] font-mono shrink-0">
         {streaming ? (
-          <span className="text-th-text-3">streaming…</span>
+          <span className="text-th-text-3">{receivedCount} received · streaming…</span>
         ) : (
-          <span className="text-th-text-2">{log.length} message{log.length === 1 ? "" : "s"}</span>
+          <span className="text-th-text-2">{receivedCount} received · {log.length} event{log.length === 1 ? "" : "s"}</span>
         )}
       </div>
       <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 flex flex-col gap-3">
@@ -52,6 +60,7 @@ export default function GrpcResponseLog({ log, streaming }: { log: GrpcLogEntry[
             )}
           </div>
         ))}
+        <div ref={endRef} />
       </div>
     </div>
   );

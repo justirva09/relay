@@ -271,7 +271,7 @@ function WorkspaceFolderBanner() {
 }
 
 function Main() {
-  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, setProtoLibrary, compareOpen, closeCompare, openCompare, runnerOpen, openRunner, closeRunner, closeTab, closeAllTabs, setActiveTab } = useWorkspace();
+  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, cancelGrpcTab, setProtoLibrary, compareOpen, closeCompare, openCompare, runnerOpen, openRunner, closeRunner, closeTab, closeAllTabs, setActiveTab } = useWorkspace();
   const activeTab = tabs.find((t) => t.nodeId === activeTabId) || null;
   const { responseLayout } = useLayout();
   const [showOverview, setShowOverview] = useState(false);
@@ -370,11 +370,11 @@ function Main() {
       const typing = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
       const combo = comboFromEvent(e);
       if (!combo) return;
-      // request.send (mod+enter) is deliberately allowed while typing — it's
-      // the whole point of the shortcut, used constantly from inside the
-      // URL bar/body editor. Everything else stays disabled while typing so
-      // e.g. plain letters bound to an action don't fire while filling a form.
-      const allowWhileTyping = combo === getEffectiveCombo("request.send");
+      // Send and Save are deliberately allowed while typing because both are
+      // commonly triggered from request body/message editors. Other shortcuts
+      // stay disabled so plain letters bound to actions cannot fire in inputs.
+      const allowWhileTyping =
+        combo === getEffectiveCombo("request.send") || combo === getEffectiveCombo("tab.save");
       if (typing && !allowWhileTyping) return;
       for (const def of KEYBINDING_DEFS) {
         if (combo !== getEffectiveCombo(def.id)) continue;
@@ -467,6 +467,7 @@ function Main() {
           streaming={activeTab.streaming}
           onChange={(patch) => updateGrpcDraft(activeTab.nodeId, patch)}
           onSend={() => sendGrpcTab(activeTab.nodeId)}
+          onCancel={() => cancelGrpcTab(activeTab.nodeId)}
           protoFiles={protoFiles}
           onImportProto={handleImportProto}
           onRemoveProto={handleRemoveProto}
@@ -489,7 +490,14 @@ function Main() {
   const renderBottomPanel = () => {
     if (!activeTab) return null;
     if (activeTab.kind === "grpc") {
-      return <GrpcResponsePanel log={activeTab.log} streaming={activeTab.streaming} lastResponse={activeTab.lastResponse} />;
+      return (
+        <GrpcResponsePanel
+          log={activeTab.log}
+          streaming={activeTab.streaming}
+          methodType={activeTab.draft.methodType}
+          lastResponse={activeTab.lastResponse}
+        />
+      );
     }
     const response = activeTab.response;
     return (

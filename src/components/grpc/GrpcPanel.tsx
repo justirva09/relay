@@ -256,15 +256,37 @@ interface Props {
   streaming: boolean;
   onChange: (patch: Partial<GrpcRequestData>) => void;
   onSend: () => void;
+  onCancel: () => void;
   protoFiles: { name: string; content: string }[];
   onImportProto: () => void;
   onRemoveProto: (name: string) => void;
 }
 
-export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFiles, onImportProto, onRemoveProto }: Props) {
+function randomGrpcSampleSeed(): number {
+  const values = new Uint32Array(1);
+  crypto.getRandomValues(values);
+  return values[0];
+}
+
+export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel, protoFiles, onImportProto, onRemoveProto }: Props) {
   const [tab, setTab] = useState<"message" | "metadata" | "settings" | "definition">("message");
   const [serviceFiles, setServiceFiles] = useState<Set<string>>(new Set());
   const [schemaFields, setSchemaFields] = useState<ProtoFieldSchema[] | undefined>(undefined);
+  const [sampleSeed, setSampleSeed] = useState(randomGrpcSampleSeed);
+  const [generatingSample, setGeneratingSample] = useState(false);
+
+  const generateSample = async (randomize = false) => {
+    if (!schemaFields || generatingSample) return;
+    const seed = randomize ? randomGrpcSampleSeed() : sampleSeed;
+    if (randomize) setSampleSeed(seed);
+    setGeneratingSample(true);
+    try {
+      const { generateGrpcSample } = await import("../../lib/grpcSampleGenerator");
+      onChange({ messageJson: generateGrpcSample(schemaFields, seed) });
+    } finally {
+      setGeneratingSample(false);
+    }
+  };
 
   const handleSelectMethod = (service: string, method: string, methodType: GrpcMethodType) => {
     onChange({ service, method, methodType, messageJson: defaultMessageForMethodType(methodType) });
@@ -342,6 +364,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
           draft.settings.maxResponseSizeMb > 1024
         ? "Max response size must be a whole number between 1 and 1024 MB."
         : null;
+  const canStop = streaming && draft.methodType !== "unary";
 
   return (
     <div className="flex flex-col">
@@ -365,12 +388,14 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
           onSelect={handleSelectMethod}
         />
         <button
-          onClick={onSend}
-          disabled={streaming || !draft.method || !!settingsError}
+          onClick={canStop ? onCancel : onSend}
+          disabled={streaming ? !canStop : !draft.method || !!settingsError}
           title={settingsError ?? undefined}
-          className="px-4 py-2 rounded-md text-[13px] font-semibold border border-transparent bg-th-accent text-white hover:bg-th-accent-hover transition-colors shrink-0 disabled:opacity-60"
+          className={`px-4 py-2 rounded-md text-[13px] font-semibold border border-transparent text-white transition-colors shrink-0 disabled:opacity-60 ${
+            canStop ? "bg-rose-500 hover:bg-rose-600" : "bg-th-accent hover:bg-th-accent-hover"
+          }`}
         >
-          {streaming ? "Streaming…" : "Send"}
+          {canStop ? "Stop" : streaming ? "Sending…" : "Send"}
         </button>
       </div>
 
@@ -411,7 +436,25 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
       <div className="px-4 py-3">
         {tab === "message" && (
           <div className="flex flex-col gap-1.5">
-            <div className="flex justify-end">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => void generateSample()}
+                  disabled={!schemaFields || generatingSample}
+                  title={schemaFields ? "Generate a reproducible sample from the protobuf schema" : "Select a method and load its schema first"}
+                  className="px-2 py-0.5 rounded text-[11px] font-mono text-th-accent-text bg-th-accent-bg ring-1 ring-th-accent-border hover:bg-th-accent/15 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {generatingSample ? "Generating..." : "Generate sample"}
+                </button>
+                <button
+                  onClick={() => void generateSample(true)}
+                  disabled={!schemaFields || generatingSample}
+                  title="Generate with a new random seed"
+                  className="h-5 w-5 grid place-items-center rounded text-[12px] text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg disabled:opacity-40"
+                >
+                  ↻
+                </button>
+              </div>
               <button
                 onClick={() => {
                   try {

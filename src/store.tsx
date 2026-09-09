@@ -3,7 +3,7 @@ import { GrpcLogEntry, GrpcRequestData, GrpcResponseSummary, GrpcTabState, HttpT
 import { loadWorkspaceFile, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles } from "./lib/tauri";
 import { runRequest } from "./lib/useSendRequest";
 import { simulateGrpcCall } from "./lib/grpcMock";
-import { invokeGrpcUnary } from "./lib/grpcClient";
+import { cancelGrpcServerStream, invokeGrpcServerStream, invokeGrpcUnary } from "./lib/grpcClient";
 import { findNode, mapTree } from "./store/treeOps";
 import { useCookieJar } from "./store/useCookieJar";
 import { useMockServer } from "./store/useMockServer";
@@ -115,6 +115,7 @@ interface Ctx {
   duplicateNode: (id: string) => string | null;
   updateGrpcDraft: (id: string, patch: Partial<GrpcRequestData>) => void;
   sendGrpcTab: (id: string) => Promise<void>;
+  cancelGrpcTab: (id: string) => Promise<void>;
   setProtoLibrary: (files: { name: string; content: string }[]) => void;
 }
 
@@ -155,7 +156,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveArgsRef = useRef<{ dir: string; data: string; hidden: boolean } | null>(null);
   const autosavePausedRef = useRef(false);
-  const grpcCancelRefs = useRef<Map<string, { current: boolean }>>(new Map());
+  const grpcCancelRefs = useRef<Map<string, { current: boolean; requestId?: string }>>(new Map());
 
   const { cookies, setCookies } = useCookieJar(workspaceDir);
   const { mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer } = useMockServer(workspaceDir);
@@ -369,6 +370,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const cancelRef = grpcCancelRefs.current.get(id);
       if (cancelRef) {
         cancelRef.current = true;
+        if (cancelRef.requestId) cancelGrpcServerStream(cancelRef.requestId).catch(() => {});
         grpcCancelRefs.current.delete(id);
       }
       const idx = tabs.findIndex((x) => x.nodeId === id);
@@ -494,14 +496,102 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const sendGrpcTab = useCallback(
     async (id: string) => {
-      const cancelRef = { current: false };
+      const tab = tabs.find((item) => item.nodeId === id);
+      if (!tab || tab.kind !== "grpc") return;
+      const cancelRef: { current: boolean; requestId?: string } = { current: false };
       grpcCancelRefs.current.set(id, cancelRef);
       setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: true, log: [], lastResponse: null } : x)));
-      const tab = tabs.find((t) => t.nodeId === id);
-      if (!tab || tab.kind !== "grpc") return;
 
       const canUseImportedProto =
         tab.draft.protoSource === "imported" && !!tab.draft.activeProtoFile;
+
+      if ((tab.draft.protoSource === "reflection" || canUseImportedProto) && tab.draft.methodType === "server-stream") {
+        const sentEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "sent", json: tab.draft.messageJson };
+        setTabs((current) =>
+          current.map((item) => (item.nodeId === id && item.kind === "grpc" ? { ...item, log: [sentEntry] } : item))
+        );
+        const requestId = uid();
+        cancelRef.requestId = requestId;
+        const receivedMessages: string[] = [];
+        let initialMetadata: [string, string][] = [];
+        try {
+          const metadata: [string, string][] = tab.draft.metadata
+            .filter((item) => item.enabled && item.key.trim())
+            .map((item) => [item.key, item.value]);
+          const result = await invokeGrpcServerStream(
+            requestId,
+            {
+              url: tab.draft.url,
+              service: tab.draft.service,
+              method: tab.draft.method,
+              messageJson: tab.draft.messageJson,
+              metadata,
+              timeoutMs: tab.draft.settings.timeoutMs,
+              waitForReady: tab.draft.settings.waitForReady,
+              compression: tab.draft.settings.compression,
+              maxResponseSizeBytes: Math.round(tab.draft.settings.maxResponseSizeMb * 1024 * 1024),
+              protoFiles: canUseImportedProto ? workspace.protoLibrary : undefined,
+              entryFile: canUseImportedProto ? tab.draft.activeProtoFile : undefined,
+            },
+            (json) => {
+              receivedMessages.push(json);
+              if (cancelRef.current) return;
+              const entry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "received", json };
+              setTabs((current) =>
+                current.map((item) =>
+                  item.nodeId === id && item.kind === "grpc" ? { ...item, log: [...item.log, entry] } : item
+                )
+              );
+            },
+            (metadata) => {
+              initialMetadata = metadata;
+            }
+          );
+          const body = result.cancelled
+            ? JSON.stringify(receivedMessages.map((json) => JSON.parse(json)), null, 2)
+            : result.json;
+          const lastResponse: GrpcResponseSummary = {
+            ok: !result.cancelled,
+            durationMs: result.durationMs,
+            sizeBytes: result.cancelled ? new TextEncoder().encode(body).length : result.sizeBytes,
+            metadata: result.cancelled ? initialMetadata : result.metadata,
+            body,
+            error: null,
+            compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
+            cancelled: result.cancelled,
+            messageCount: result.cancelled ? receivedMessages.length : result.messageCount,
+          };
+          setTabs((current) =>
+            current.map((item) =>
+              item.nodeId === id && item.kind === "grpc" ? { ...item, streaming: false, lastResponse } : item
+            )
+          );
+          cacheGrpcResponse(id, lastResponse);
+        } catch (error) {
+          const errorText = String(error);
+          const errorEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "error", json: errorText };
+          const lastResponse: GrpcResponseSummary = {
+            ok: false,
+            durationMs: null,
+            sizeBytes: 0,
+            metadata: [],
+            body: "",
+            error: errorText,
+            compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
+          };
+          setTabs((current) =>
+            current.map((item) =>
+              item.nodeId === id && item.kind === "grpc"
+                ? { ...item, log: [...item.log, errorEntry], streaming: false, lastResponse }
+                : item
+            )
+          );
+          cacheGrpcResponse(id, lastResponse);
+        } finally {
+          grpcCancelRefs.current.delete(id);
+        }
+        return;
+      }
 
       if ((tab.draft.protoSource === "reflection" || canUseImportedProto) && tab.draft.methodType === "unary") {
         const sentEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "sent", json: tab.draft.messageJson };
@@ -551,6 +641,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           };
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [sentEntry, errEntry], streaming: false, lastResponse } : x)));
           cacheGrpcResponse(id, lastResponse);
+        } finally {
+          grpcCancelRefs.current.delete(id);
         }
         return;
       }
@@ -564,9 +656,23 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         () => cancelRef.current
       );
       setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: false } : x)));
+      grpcCancelRefs.current.delete(id);
     },
     [tabs, workspace.protoLibrary, cacheGrpcResponse]
   );
+
+  const cancelGrpcTab = useCallback(async (id: string) => {
+    const cancelRef = grpcCancelRefs.current.get(id);
+    if (!cancelRef) return;
+    cancelRef.current = true;
+    if (cancelRef.requestId) {
+      try {
+        await cancelGrpcServerStream(cancelRef.requestId);
+      } catch {
+        // The stream may have completed between clicking Stop and dispatching cancellation.
+      }
+    }
+  }, []);
 
   const value = useMemo<Ctx>(
     () => ({
@@ -613,6 +719,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       saveTab,
       sendTab,
       sendGrpcTab,
+      cancelGrpcTab,
       setVariables,
       pendingCloseId,
       confirmCloseTab,
@@ -651,7 +758,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       moveNodes,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, cancelGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

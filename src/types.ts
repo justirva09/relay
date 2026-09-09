@@ -261,6 +261,8 @@ export interface GrpcResponseSummary {
   body: string;
   error: string | null;
   compression?: "gzip";
+  cancelled?: boolean;
+  messageCount?: number;
 }
 
 export interface GrpcTabState {

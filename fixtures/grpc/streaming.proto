@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package relay.testing;
+
+service StreamService {
+  rpc Watch(WatchRequest) returns (stream WatchReply);
+}
+
+message WatchRequest {
+  string name = 1;
+  uint32 count = 2;
+  uint32 delay_ms = 3;
+}
+
+message WatchReply {
+  string message = 1;
+  uint32 sequence = 2;
+}
