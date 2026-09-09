@@ -19,10 +19,12 @@ interface Suggestion {
   detail: string;
   isMethod?: boolean;
   hasArgs?: boolean;
+  insertText?: string;
+  cursorBack?: number;
 }
 
 interface Menu {
-  kind: "pm" | "variable" | "proto";
+  kind: "pm" | "variable" | "proto" | "protoValue";
   items: Suggestion[];
   activeIndex: number;
   replaceFrom: number;
@@ -88,6 +90,23 @@ function unclosedJsonKeyAt(value: string, pos: number): { partial: string; repla
   return { partial: match[1], replaceFrom: pos - match[1].length, keyStart: match.index };
 }
 
+// Matches a JSON string value being edited and returns its owning field name.
+// The closing quote may already exist after the caret because the editor auto-pairs it.
+function unclosedJsonValueAt(value: string, pos: number): { key: string; partial: string; replaceFrom: number; valueStart: number } | null {
+  const before = value.slice(0, pos);
+  const valueMatch = /"([^"\\]*)$/.exec(before);
+  if (!valueMatch) return null;
+  const prefix = before.slice(0, valueMatch.index);
+  const keyMatch = /"([\w]+)"\s*:\s*$/.exec(prefix);
+  if (!keyMatch) return null;
+  return {
+    key: keyMatch[1],
+    partial: valueMatch[1],
+    replaceFrom: valueMatch.index + 1,
+    valueStart: valueMatch.index,
+  };
+}
+
 // walks value up to boundary tracking brace/bracket nesting. returns the field chain
 // containing the cursor plus keys already used in that object (so an already-filled
 // field isn't suggested again). bails on malformed JSON instead of throwing, docs are usually mid-edit
@@ -130,20 +149,105 @@ function jsonContextAt(value: string, boundary: number): { path: string[]; sibli
 }
 
 function protoKindLabel(f: ProtoFieldSchema): string {
-  return f.kind + (f.repeated ? "[]" : "");
+  const type = f.typeName || f.kind;
+  return type + (f.repeated ? "[]" : "") + (f.oneof ? ` · oneof ${f.oneof}` : "");
 }
 
-function resolveProtoCompletions(path: string[], siblingKeys: Set<string>, partial: string, root: ProtoFieldSchema[]): Suggestion[] {
+function protoPlaceholder(f: ProtoFieldSchema): { text: string; cursorBack: number } {
+  let text: string;
+  let cursorBack = 0;
+  if (f.typeName === "google.protobuf.Timestamp") {
+    text = '"1970-01-01T00:00:00Z"';
+    cursorBack = 1;
+  } else if (f.typeName === "google.protobuf.Duration") {
+    text = '"0s"';
+    cursorBack = 1;
+  } else if (f.typeName === "google.protobuf.FieldMask") {
+    text = '""';
+    cursorBack = 1;
+  } else if (["google.protobuf.Int64Value", "google.protobuf.UInt64Value"].includes(f.typeName)) {
+    text = '"0"';
+    cursorBack = 1;
+  } else if (["google.protobuf.FloatValue", "google.protobuf.DoubleValue", "google.protobuf.Int32Value", "google.protobuf.UInt32Value"].includes(f.typeName)) {
+    text = "0";
+  } else if (f.typeName === "google.protobuf.BoolValue") {
+    text = "false";
+  } else if (["google.protobuf.StringValue", "google.protobuf.BytesValue"].includes(f.typeName)) {
+    text = '""';
+    cursorBack = 1;
+  } else if (f.typeName === "google.protobuf.ListValue") {
+    text = "[]";
+    cursorBack = 1;
+  } else if (f.typeName === "google.protobuf.Value") {
+    text = "null";
+  } else if (f.typeName === "google.protobuf.Any") {
+    text = '{"@type": ""}';
+    cursorBack = 2;
+  } else if (f.kind === "string" || f.kind === "enum") {
+    text = '""';
+    cursorBack = 1;
+  } else if (f.kind === "bool") {
+    text = "false";
+  } else if (f.kind === "message" || f.kind === "map") {
+    text = "{}";
+    cursorBack = 1;
+  } else {
+    text = /(?:int64|uint64|sint64|fixed64|sfixed64)$/.test(f.typeName) ? '"0"' : "0";
+  }
+  if (f.repeated) {
+    text = `[${text}]`;
+    cursorBack += 1;
+  }
+  return { text, cursorBack };
+}
+
+function protoSiblingsAt(path: string[], root: ProtoFieldSchema[]): ProtoFieldSchema[] | null {
   let siblings = root;
   for (const seg of path) {
     const node = siblings.find((f) => f.name === seg);
-    if (!node || !node.fields) return [];
+    if (!node || !node.fields) return null;
     siblings = node.fields;
   }
+  return siblings;
+}
+
+function resolveProtoCompletions(path: string[], siblingKeys: Set<string>, partial: string, root: ProtoFieldSchema[]): Suggestion[] {
+  const siblings = protoSiblingsAt(path, root);
+  if (!siblings) return [];
+  const selectedOneofs = new Set(
+    siblings.filter((field) => siblingKeys.has(field.name) && field.oneof).map((field) => field.oneof)
+  );
   const lower = partial.toLowerCase();
   return siblings
-    .filter((f) => f.name.toLowerCase().startsWith(lower) && !siblingKeys.has(f.name))
-    .map((f) => ({ label: f.name, detail: protoKindLabel(f) }));
+    .filter(
+      (f) =>
+        f.name.toLowerCase().startsWith(lower) &&
+        !siblingKeys.has(f.name) &&
+        (!f.oneof || !selectedOneofs.has(f.oneof))
+    )
+    .map((f) => {
+      const placeholder = protoPlaceholder(f);
+      return {
+        label: f.name,
+        detail: protoKindLabel(f),
+        insertText: `${f.name}": ${placeholder.text}`,
+        cursorBack: placeholder.cursorBack,
+      };
+    });
+}
+
+function resolveProtoValueCompletions(
+  path: string[],
+  fieldName: string,
+  partial: string,
+  root: ProtoFieldSchema[]
+): Suggestion[] {
+  const field = protoSiblingsAt(path, root)?.find((candidate) => candidate.name === fieldName);
+  if (!field || field.kind !== "enum" || !field.enumValues) return [];
+  const lower = partial.toLowerCase();
+  return field.enumValues
+    .filter((value) => value.toLowerCase().startsWith(lower))
+    .map((value) => ({ label: value, detail: field.typeName || "enum", insertText: value }));
 }
 
 interface HistoryEntry {
@@ -239,6 +343,15 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
         }
       }
       if (protoFields && protoFields.length) {
+        const valueContext = unclosedJsonValueAt(val, pos);
+        if (valueContext) {
+          const { path } = jsonContextAt(val, valueContext.valueStart);
+          const items = resolveProtoValueCompletions(path, valueContext.key, valueContext.partial, protoFields);
+          if (items.length) {
+            setMenu(buildMenu(val, "protoValue", items, valueContext.replaceFrom, pos));
+            return;
+          }
+        }
         const key = unclosedJsonKeyAt(val, pos);
         if (key) {
           const { path, siblingKeys } = jsonContextAt(val, key.keyStart + 1);
@@ -318,15 +431,15 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
         menu.kind === "variable"
           ? `${item.label}}}`
           : menu.kind === "proto"
-          ? `${item.label}": `
-          : item.label + (item.isMethod ? "()" : "");
+          ? item.insertText ?? `${item.label}": `
+          : item.insertText ?? item.label + (item.isMethod ? "()" : "");
       // completing a JSON key: the auto-inserted closing quote is still sitting right after
       // the cursor, eat it too since insertText already supplies its own closing quote
       if (menu.kind === "proto" && value[replaceTo] === '"') replaceTo += 1;
       const next = value.slice(0, menu.replaceFrom) + insertText + value.slice(replaceTo);
       const cursor =
-        menu.kind === "variable" || menu.kind === "proto"
-          ? menu.replaceFrom + insertText.length
+        menu.kind === "variable" || menu.kind === "proto" || menu.kind === "protoValue"
+          ? menu.replaceFrom + insertText.length - (item.cursorBack ?? 0)
           : menu.replaceFrom + item.label.length + (item.isMethod ? (item.hasArgs ? 1 : 2) : 0);
       commitEdit(next, cursor, cursor, { coalesce: false });
       setMenu(null);

@@ -139,6 +139,17 @@ export interface RequestData {
 
 export type GrpcMethodType = "unary" | "server-stream" | "client-stream" | "bidi";
 
+export interface GrpcRequestSettings {
+  timeoutMs: number;
+  waitForReady: boolean;
+  compression: "none" | "gzip";
+  maxResponseSizeMb: number;
+}
+
+export function defaultGrpcRequestSettings(): GrpcRequestSettings {
+  return { timeoutMs: 30_000, waitForReady: false, compression: "none", maxResponseSizeMb: 4 };
+}
+
 export interface GrpcRequestData {
   url: string;
   service: string;
@@ -148,6 +159,7 @@ export interface GrpcRequestData {
   metadata: KVRow[];
   protoSource: "reflection" | "imported";
   activeProtoFile?: string;
+  settings: GrpcRequestSettings;
 }
 
 export interface ProtoLibraryFile {
@@ -322,6 +334,16 @@ export function normalizeRequestData(req: any): RequestData {
   };
 }
 
+export function normalizeGrpcRequestData(req: any): GrpcRequestData {
+  return {
+    ...req,
+    settings:
+      req.settings && typeof req.settings === "object"
+        ? { ...defaultGrpcRequestSettings(), ...req.settings }
+        : defaultGrpcRequestSettings(),
+  };
+}
+
 // Names a fresh saved example from its response — timestamp keeps repeated
 // saves of the same status from colliding, user can rename afterward.
 export function nameExample(status: number, statusText: string): string {
@@ -380,6 +402,7 @@ export function defaultGrpcRequest(url = "grpc://localhost:50051"): GrpcRequestD
     messageJson: "{}",
     metadata: [newRow()],
     protoSource: "reflection",
+    settings: defaultGrpcRequestSettings(),
   };
 }
 

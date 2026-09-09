@@ -2,10 +2,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { GrpcRequestData, GrpcMethodType, defaultMessageForMethodType } from "../../types";
 import { MOCK_GRPC_SERVICES } from "../../lib/grpcMock";
 import { listGrpcServices, listGrpcServicesFromProto, listProtoServiceFiles, fetchGrpcMethodSchema, GrpcCatalogService, ProtoFieldSchema } from "../../lib/grpcClient";
-import CodeEditor from "../CodeEditor";
+import ResizableCodeEditor from "../ResizableCodeEditor";
 import KeyValueEditor from "../KeyValueEditor";
 import GrpcServicePicker from "./GrpcServicePicker";
 import FloatingMenu from "../FloatingMenu";
+import ToggleSwitch from "../ToggleSwitch";
 
 function indent(text: string): string {
   return text
@@ -261,7 +262,7 @@ interface Props {
 }
 
 export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFiles, onImportProto, onRemoveProto }: Props) {
-  const [tab, setTab] = useState<"message" | "metadata" | "definition">("message");
+  const [tab, setTab] = useState<"message" | "metadata" | "settings" | "definition">("message");
   const [serviceFiles, setServiceFiles] = useState<Set<string>>(new Set());
   const [schemaFields, setSchemaFields] = useState<ProtoFieldSchema[] | undefined>(undefined);
 
@@ -380,6 +381,7 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
             [
               ["message", "Message"],
               ["metadata", `Metadata${enabledMetadataCount ? ` (${enabledMetadataCount})` : ""}`],
+              ["settings", "Settings"],
               ["definition", "Service definition"],
             ] as const
           ).map(([key, label]) => (
@@ -412,12 +414,15 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
                 Prettify
               </button>
             </div>
-            <CodeEditor
+            <ResizableCodeEditor
               value={draft.messageJson}
               onChange={(v) => onChange({ messageJson: v })}
               placeholder={messagePlaceholder}
               protoFields={schemaFields}
-              className="h-48 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
+              storageKey="relay-grpc-message-height"
+              defaultHeight={200}
+              resizeLabel="gRPC message editor"
+              className="bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
             />
             <span className="text-[11px] text-th-text-4 font-mono">
               {draft.methodType === "client-stream" || draft.methodType === "bidi"
@@ -429,6 +434,66 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, protoFil
         )}
         {tab === "metadata" && (
           <KeyValueEditor rows={draft.metadata} onChangeRows={(rows) => onChange({ metadata: rows })} placeholderKey="metadata key" placeholderVal="value" />
+        )}
+        {tab === "settings" && (
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-[13px] font-medium text-th-text-1">Request deadline (ms)</p>
+                <p className="text-[11.5px] text-th-text-3">Maximum time for discovery, connection, and response; 0 uses 30 seconds</p>
+              </div>
+              <input
+                type="number"
+                min={0}
+                value={draft.settings.timeoutMs}
+                onChange={(e) => onChange({ settings: { ...draft.settings, timeoutMs: Math.max(0, Number(e.target.value) || 0) } })}
+                className="w-28 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 focus:outline-none focus:border-th-border-focus"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-[13px] font-medium text-th-text-1">Wait for ready</p>
+                <p className="text-[11.5px] text-th-text-3">Wait for an unavailable channel until the request deadline</p>
+              </div>
+              <ToggleSwitch
+                checked={draft.settings.waitForReady}
+                onChange={(waitForReady) => onChange({ settings: { ...draft.settings, waitForReady } })}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-[13px] font-medium text-th-text-1">Compression</p>
+                <p className="text-[11.5px] text-th-text-3">Compress requests and accept compressed responses</p>
+              </div>
+              <select
+                value={draft.settings.compression}
+                onChange={(e) => onChange({ settings: { ...draft.settings, compression: e.target.value as "none" | "gzip" } })}
+                className="w-28 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 focus:outline-none focus:border-th-border-focus"
+              >
+                <option value="none">None</option>
+                <option value="gzip">gzip</option>
+              </select>
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-[13px] font-medium text-th-text-1">Max response size (MB)</p>
+                <p className="text-[11.5px] text-th-text-3">Maximum decoded protobuf message size</p>
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={1024}
+                value={draft.settings.maxResponseSizeMb}
+                onChange={(e) => onChange({
+                  settings: { ...draft.settings, maxResponseSizeMb: Math.min(1024, Math.max(1, Number(e.target.value) || 1)) },
+                })}
+                className="w-28 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1 focus:outline-none focus:border-th-border-focus"
+              />
+            </div>
+          </div>
         )}
         {tab === "definition" && (
           <div className="flex flex-col gap-2">

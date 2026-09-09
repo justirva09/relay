@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { GrpcLogEntry, GrpcRequestData, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, StoredCookie, TabState, TreeNode, Workspace, demoWorkspace, newRow, normalizeRequestData, uid } from "./types";
+import { GrpcLogEntry, GrpcRequestData, GrpcResponseSummary, GrpcTabState, HttpTabState, KVRow, RequestData, StoredCookie, TabState, TreeNode, Workspace, demoWorkspace, newRow, normalizeGrpcRequestData, normalizeRequestData, uid } from "./types";
 import { loadWorkspaceFile, pickWorkspaceFolder, getLastWorkspaceDir, setLastWorkspaceDir, loadWorkspaceDir, saveWorkspaceDir, dirHasOtherFiles } from "./lib/tauri";
 import { runRequest } from "./lib/useSendRequest";
 import { simulateGrpcCall } from "./lib/grpcMock";
@@ -331,7 +331,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           const tab: GrpcTabState = {
             nodeId: id,
             kind: "grpc",
-            draft: JSON.parse(JSON.stringify(node.request)),
+            draft: normalizeGrpcRequestData(JSON.parse(JSON.stringify(node.request))),
             dirty: false,
             log: [],
             streaming: false,
@@ -516,6 +516,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             method: tab.draft.method,
             messageJson: tab.draft.messageJson,
             metadata,
+            timeoutMs: tab.draft.settings.timeoutMs,
+            waitForReady: tab.draft.settings.waitForReady,
+            compression: tab.draft.settings.compression,
+            maxResponseSizeBytes: Math.round(tab.draft.settings.maxResponseSizeMb * 1024 * 1024),
             protoFiles: canUseImportedProto ? workspace.protoLibrary : undefined,
             entryFile: canUseImportedProto ? tab.draft.activeProtoFile : undefined,
           });
