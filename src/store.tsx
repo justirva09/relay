@@ -10,7 +10,7 @@ import { useMockServer } from "./store/useMockServer";
 import { useSafeMode } from "./store/useSafeMode";
 import { useResponseCache } from "./store/useResponseCache";
 import { useEnvironments } from "./store/useEnvironments";
-import { useTreeActions } from "./store/useTreeActions";
+import { GrpcApiImportService, useTreeActions } from "./store/useTreeActions";
 import { useImportExport } from "./store/useImportExport";
 
 interface Ctx {
@@ -112,6 +112,7 @@ interface Ctx {
   resumeAutosave: () => void;
   moveNodes: (nodeIds: string[], targetId: string, position: "before" | "after" | "inside") => void;
   addGrpcRequest: (parentId: string | null) => string;
+  importGrpcApi: (parentId: string | null, apiName: string, url: string, services: GrpcApiImportService[]) => { folderId: string; requestCount: number };
   duplicateNode: (id: string) => string | null;
   updateGrpcDraft: (id: string, patch: Partial<GrpcRequestData>) => void;
   sendGrpcTab: (id: string) => Promise<void>;
@@ -164,7 +165,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const { responseCacheEnabled, setResponseCacheEnabled, responseCacheRef, persistResponseCache } = useResponseCache(workspaceDir);
   const { setVariables, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, applyVariableChanges } =
     useEnvironments(workspace, setWorkspace);
-  const { addFolder, addRequest, addGrpcRequest, renameNode, duplicateNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, moveNodes, setProtoLibrary } =
+  const { addFolder, addRequest, addGrpcRequest, importGrpcApi, renameNode, duplicateNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, moveNodes, setProtoLibrary } =
     useTreeActions(workspace, setWorkspace, setTabs, setActiveTabId);
   const {
     importCollection,
@@ -703,6 +704,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       addFolder,
       addRequest,
       addGrpcRequest,
+      importGrpcApi,
       duplicateNode,
       renameNode,
       deleteNode,
@@ -758,7 +760,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       moveNodes,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, cancelGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, importGrpcApi, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, cancelGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

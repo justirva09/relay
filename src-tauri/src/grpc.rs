@@ -25,6 +25,7 @@ use protox::file::{ChainFileResolver, File as ProtoFile, FileResolver, GoogleFil
 pub struct GrpcMethodInfo {
     pub name: String,
     pub method_type: String,
+    pub template: String,
 }
 
 #[derive(Serialize)]
@@ -340,6 +341,8 @@ pub fn grpc_list_services_from_proto(
             .map(|m| GrpcMethodInfo {
                 name: m.name().to_string(),
                 method_type: method_type_str(m.is_client_streaming(), m.is_server_streaming()).to_string(),
+                template: serde_json::to_string_pretty(&message_template(&m.input(), &HashSet::new()))
+                    .unwrap_or_else(|_| "{}".to_string()),
             })
             .collect();
         services.push(GrpcServiceInfo { name: service_desc.full_name().to_string(), methods });
@@ -384,6 +387,8 @@ pub async fn grpc_list_services(url: String) -> Result<Vec<GrpcServiceInfo>, Str
             .map(|m| GrpcMethodInfo {
                 name: m.name().to_string(),
                 method_type: method_type_str(m.is_client_streaming(), m.is_server_streaming()).to_string(),
+                template: serde_json::to_string_pretty(&message_template(&m.input(), &HashSet::new()))
+                    .unwrap_or_else(|_| "{}".to_string()),
             })
             .collect();
         services.push(GrpcServiceInfo { name: svc.name, methods });
@@ -1041,6 +1046,21 @@ mod schema_tests {
     fn test_pool() -> DescriptorPool {
         let files = vec![ProtoFileInput { name: "test.proto".to_string(), content: TEST_PROTO.to_string() }];
         build_pool_from_proto_files(&files, "test.proto").expect("proto should compile")
+    }
+
+    #[test]
+    fn service_catalog_includes_an_importable_message_template() {
+        let files = vec![ProtoFileInput { name: "test.proto".to_string(), content: TEST_PROTO.to_string() }];
+        let services = grpc_list_services_from_proto(files, "test.proto".to_string()).expect("catalog should build");
+        let method = &services[0].methods[0];
+
+        assert_eq!(services[0].name, "test.PetService");
+        assert_eq!(method.name, "CreatePet");
+        assert_eq!(method.method_type, "unary");
+        let template: serde_json::Value = serde_json::from_str(&method.template).expect("template should be JSON");
+        assert_eq!(template["ownerId"], json!("0"));
+        assert!(!template.as_object().unwrap().contains_key("email"));
+        assert!(!template.as_object().unwrap().contains_key("phone"));
     }
 
     #[test]

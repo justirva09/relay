@@ -3,6 +3,7 @@ import { TreeNode } from "../types";
 import { useWorkspace } from "../store";
 import GitPanel from "./GitPanel";
 import CurlImportModal from "./CurlImportModal";
+import GrpcReflectionImportModal from "./grpc/GrpcReflectionImportModal";
 import { registerAction, setActiveSearchRegion } from "../lib/keybindings";
 import { useLayout } from "../lib/layout";
 import { TreeItem } from "./sidebar/TreeItem";
@@ -51,11 +52,12 @@ const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 260;
 
 export default function Sidebar() {
-  const { workspace, addFolder, addRequest, addGrpcRequest, duplicateNode, deleteNodes, moveNodes, renameWorkspace, collapseAllFolders, importIntoFolder, openTab, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport } = useWorkspace();
+  const { workspace, addFolder, addRequest, addGrpcRequest, importGrpcApi, duplicateNode, deleteNodes, moveNodes, renameWorkspace, collapseAllFolders, importIntoFolder, openTab, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport } = useWorkspace();
   const { sidebarCollapsed } = useLayout();
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [triggerEditId, setTriggerEditId] = useState<string | null>(null);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
+  const [grpcImportTarget, setGrpcImportTarget] = useState<{ parentId: string | null } | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -298,6 +300,7 @@ export default function Sidebar() {
               const id = addGrpcRequest(null);
               if (id) setTimeout(() => setTriggerEditId(id), 50);
             }}
+            onImportGrpc={() => setGrpcImportTarget({ parentId: null })}
             onAddFromCurl={() => openCurlImport(null)}
             className="h-6 w-6 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg text-[13px]"
           />
@@ -359,7 +362,7 @@ export default function Sidebar() {
           </div>
         )}
         {displayTree.map((n) => (
-          <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteIds([id])} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={handleItemMouseDown} onItemClick={handleItemClick} onAddFromCurl={openCurlImport} />
+          <TreeItem key={n.id} node={n} depth={0} onCtxMenu={handleCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={() => setTriggerEditId(null)} onDelete={(id) => setPendingDeleteIds([id])} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={handleItemMouseDown} onItemClick={handleItemClick} onAddFromCurl={openCurlImport} onImportGrpc={(parentId) => setGrpcImportTarget({ parentId })} />
         ))}
       </div>
 
@@ -413,6 +416,15 @@ export default function Sidebar() {
                     className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
                   >
                     New gRPC Request
+                  </button>
+                  <button
+                    onClick={() => {
+                      setGrpcImportTarget({ parentId: ctxMenu.nodeId });
+                      setCtxMenu(null);
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+                  >
+                    Import gRPC API
                   </button>
                   <button
                     onClick={() => {
@@ -518,6 +530,16 @@ export default function Sidebar() {
             const id = addRequest(curlImportParentId, { name, request });
             closeCurlImport();
             if (id) openTab(id);
+          }}
+        />
+      )}
+
+      {grpcImportTarget && (
+        <GrpcReflectionImportModal
+          onClose={() => setGrpcImportTarget(null)}
+          onImport={(apiName, url, services) => {
+            importGrpcApi(grpcImportTarget.parentId, apiName, url, services);
+            setGrpcImportTarget(null);
           }}
         />
       )}

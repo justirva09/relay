@@ -1,6 +1,16 @@
 import { Dispatch, SetStateAction, useCallback } from "react";
-import { FolderNode, GrpcRequestNode, RequestData, RequestNode, TabState, TreeNode, Workspace, defaultGrpcRequest, defaultRequest, uid } from "../types";
+import { FolderNode, GrpcMethodType, GrpcRequestNode, RequestData, RequestNode, TabState, TreeNode, Workspace, defaultGrpcRequest, defaultRequest, uid } from "../types";
 import { cloneWithFreshIds, findNode, findParentFolderId, insertAt, mapTree } from "./treeOps";
+
+export interface GrpcApiImportService {
+  name: string;
+  methods: { name: string; methodType: GrpcMethodType; template: string }[];
+}
+
+function streamTemplate(template: string, methodType: GrpcMethodType): string {
+  if (methodType !== "client-stream" && methodType !== "bidi") return template;
+  return `[\n${template.split("\n").map((line) => `  ${line}`).join("\n")}\n]`;
+}
 
 export function useTreeActions(
   workspace: Workspace,
@@ -36,6 +46,55 @@ export function useTreeActions(
       const node: GrpcRequestNode = { id: uid(), kind: "grpc", name: "New gRPC Request", request: defaultGrpcRequest() };
       setWorkspace((ws) => ({ ...ws, tree: insertAt(ws.tree, parentId, node) }));
       return node.id;
+    },
+    [setWorkspace]
+  );
+
+  const importGrpcApi = useCallback(
+    (parentId: string | null, apiName: string, url: string, services: GrpcApiImportService[]) => {
+      const shortNames = services.map((service) => service.name.split(".").pop() || service.name);
+      const duplicateShortNames = new Set(shortNames.filter((name, index) => shortNames.indexOf(name) !== index));
+      let requestCount = 0;
+      const apiFolder: FolderNode = {
+        id: uid(),
+        kind: "folder",
+        name: apiName,
+        children: services.map((service) => {
+          const shortName = service.name.split(".").pop() || service.name;
+          const serviceFolder: FolderNode = {
+            id: uid(),
+            kind: "folder",
+            name: duplicateShortNames.has(shortName) ? service.name : shortName,
+            children: service.methods.map((method) => {
+              requestCount += 1;
+              const node: GrpcRequestNode = {
+                id: uid(),
+                kind: "grpc",
+                name: method.name,
+                request: {
+                  ...defaultGrpcRequest(url),
+                  service: service.name,
+                  method: method.name,
+                  methodType: method.methodType,
+                  messageJson: streamTemplate(method.template, method.methodType),
+                },
+              };
+              return node;
+            }),
+          };
+          return serviceFolder;
+        }),
+      };
+      setWorkspace((ws) => {
+        const parent = parentId ? findNode(ws.tree, parentId) : null;
+        const siblings = parent?.kind === "folder" ? parent.children : ws.tree;
+        const siblingNames = new Set(siblings.map((node) => node.name.toLowerCase()));
+        let uniqueName = apiName;
+        let suffix = 2;
+        while (siblingNames.has(uniqueName.toLowerCase())) uniqueName = `${apiName} (${suffix++})`;
+        return { ...ws, tree: insertAt(ws.tree, parentId, { ...apiFolder, name: uniqueName }) };
+      });
+      return { folderId: apiFolder.id, requestCount };
     },
     [setWorkspace]
   );
@@ -183,6 +242,7 @@ export function useTreeActions(
     addFolder,
     addRequest,
     addGrpcRequest,
+    importGrpcApi,
     renameNode,
     duplicateNode,
     deleteNode,
