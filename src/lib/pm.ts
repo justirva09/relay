@@ -23,7 +23,13 @@ export interface TestResultDraft {
 
 export function substituteVars(text: string | undefined, vars: Record<string, string>): string | undefined {
   if (typeof text !== "string") return text;
-  return text.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key) => (vars[key] !== undefined ? String(vars[key]) : `{{${key}}}`));
+  let result = text;
+  for (let i = 0; i < 10; i++) {
+    const next = result.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key) => (vars[key] !== undefined ? String(vars[key]) : `{{${key}}}`));
+    if (next === result) break;
+    result = next;
+  }
+  return result;
 }
 
 // Resolve workspace globals with the active environment layered on top.

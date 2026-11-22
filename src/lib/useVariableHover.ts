@@ -15,24 +15,16 @@ export interface VariableInfoEntry {
 
 export type VariableInfo = Record<string, VariableInfoEntry>;
 
-// Mirrors real variable resolution (Global, then active environment
-// overrides it), so hover/click shows what a send would actually use. Still
-// surfaces vars from a non-active environment so hovering one isn't blank.
+// Mirrors real variable resolution (Global, then active environment overrides it).
 export function buildVariableInfo(workspace: Workspace): VariableInfo {
   const info: VariableInfo = {};
   for (const v of workspace.variables) {
-    if (v.key.trim()) info[v.key] = { value: v.value, label: "Global", tabId: "globals" };
+    if (v.enabled && v.key.trim()) info[v.key] = { value: v.value, label: "Global", tabId: "globals" };
   }
   const activeEnv = workspace.environments.find((e) => e.id === workspace.activeEnvironmentId);
   if (activeEnv) {
     for (const v of activeEnv.variables) {
-      if (v.key.trim()) info[v.key] = { value: v.value, label: activeEnv.name, tabId: activeEnv.id };
-    }
-  }
-  for (const env of workspace.environments) {
-    if (env.id === workspace.activeEnvironmentId) continue;
-    for (const v of env.variables) {
-      if (v.key.trim() && !(v.key in info)) info[v.key] = { value: v.value, label: env.name, tabId: env.id };
+      if (v.enabled && v.key.trim()) info[v.key] = { value: v.value, label: activeEnv.name, tabId: activeEnv.id };
     }
   }
   return info;

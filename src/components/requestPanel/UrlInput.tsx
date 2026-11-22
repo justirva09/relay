@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import { useVariableMenu, VariableGroup } from "../../lib/useVariableMenu";
 import { useWorkspace } from "../../store";
 import { useVariableHover, variableTokenAtElement, useModifierHeld, VariableInfo } from "../../lib/useVariableHover";
@@ -25,12 +25,12 @@ export default function UrlInput({ value, onChange, onKeyDown, placeholder, vari
   const modifierHeld = useModifierHeld();
 
   const syncScroll = () => {
-    requestAnimationFrame(() => {
-      if (inputRef.current && overlayRef.current) {
-        overlayRef.current.scrollLeft = inputRef.current.scrollLeft;
-      }
-    });
+    if (inputRef.current && overlayRef.current) {
+      overlayRef.current.scrollLeft = inputRef.current.scrollLeft;
+    }
   };
+
+  useLayoutEffect(syncScroll, [value]);
 
   const select = (item: string) => {
     const result = apply(value, item);
@@ -40,6 +40,7 @@ export default function UrlInput({ value, onChange, onKeyDown, placeholder, vari
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       if (inputRef.current) inputRef.current.selectionStart = inputRef.current.selectionEnd = result.cursor;
+      syncScroll();
     });
   };
 
@@ -80,6 +81,7 @@ export default function UrlInput({ value, onChange, onKeyDown, placeholder, vari
             if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) recompute(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length);
           }}
           onScroll={syncScroll}
+          onSelect={syncScroll}
           onFocus={() => { setFocused(true); syncScroll(); }}
           onBlur={() => { setFocused(false); close(); }}
           className="absolute inset-0 w-full h-full px-3 py-2 text-[13px] font-mono bg-transparent text-transparent caret-slate-200 focus:outline-none"

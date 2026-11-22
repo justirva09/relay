@@ -6,6 +6,7 @@ import { AuthConfig, Example, KVRow, RequestData, ResponseState, SentRequest, St
 import { signAwsSigV4 } from "./awsSigV4";
 import { buildCookieHeaderValue, matchCookiesForUrl, mergeCookies, parseSetCookieHeader } from "./cookies";
 import { toBase64 } from "./base64";
+import { activeVariableRows } from "./variableResolution";
 
 const scriptRequire = (name: string) => {
   const libs: Record<string, any> = { "crypto-js": CryptoJS };
@@ -49,17 +50,7 @@ export async function runTestScriptAgainstExample(testScript: string, variables:
 // as a normal send. Used by callers (contract check) that need the resolved
 // pool without going through an actual send.
 export function mergedVariables(workspace: Workspace): KVRow[] {
-  const activeEnv = workspace.environments.find((e) => e.id === workspace.activeEnvironmentId);
-  const merged = [...workspace.variables];
-  if (activeEnv) {
-    for (const v of activeEnv.variables) {
-      if (!v.key.trim()) continue;
-      const idx = merged.findIndex((g) => g.key === v.key);
-      if (idx >= 0) merged[idx] = v;
-      else merged.push(v);
-    }
-  }
-  return merged;
+  return activeVariableRows(workspace);
 }
 
 // Swaps scheme+host+port only, keeps path/query. Lets contract-check hit the
@@ -124,7 +115,7 @@ export async function runRequest(
 
   const varsObj: Record<string, string> = {};
   variables.forEach((r) => {
-    if (r.key.trim()) varsObj[r.key] = r.value;
+    if (r.enabled && r.key.trim()) varsObj[r.key] = r.value;
   });
   // snapshot so we only write back keys a script actually changed
   const initialVarsObj: Record<string, string> = { ...varsObj };

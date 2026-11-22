@@ -11,8 +11,9 @@ import { useSafeMode } from "./store/useSafeMode";
 import { useResponseCache } from "./store/useResponseCache";
 import { useEnvironments } from "./store/useEnvironments";
 import { GrpcApiImportService, useTreeActions } from "./store/useTreeActions";
-import { useImportExport } from "./store/useImportExport";
-import { substituteVars, workspaceVariableValues } from "./lib/pm";
+import { activeVariableRows, resolveWorkspaceAddress } from "./lib/variableResolution";
+import { substituteVars } from "./lib/pm";
+import { ImportPayload, ImportStats, useImportExport } from "./store/useImportExport";
 
 interface Ctx {
   workspace: Workspace;
@@ -34,7 +35,7 @@ interface Ctx {
   // Local-only trust decision (see safeModeKey) — when true, pre-request and
   // test scripts run inside scriptSandbox.ts's isolated iframe instead of
   // this page's own JS context, so a script from an imported collection
-  // can't reach window.__TAURI_INTERNALS__ (filesystem, git, etc).
+  // can't reach window.__TAURI_INTERNALS__ (filesystem and other backend commands).
   safeMode: boolean;
   setSafeMode: (on: boolean) => void;
   // Local-only cookie jar (see lib/cookies.ts) — never part of the .relay
@@ -81,19 +82,20 @@ interface Ctx {
   setActiveEnvironment: (id: string | null) => void;
   setEnvironmentVariables: (envId: string, rows: KVRow[]) => void;
   importCollection: () => Promise<void>;
+  importVariables: () => Promise<void>;
+  exportVariables: () => Promise<boolean>;
+  importBrunoCollection: () => Promise<void>;
   importIntoFolder: (folderId: string) => Promise<void>;
-  pendingImport: { tree: TreeNode[]; variables: KVRow[]; targetFolderId?: string } | null;
-  confirmImport: (selectedIds: Set<string>) => { added: number; updated: number };
+  pendingImport: ImportPayload | null;
+  confirmImport: (selectedIds: Set<string>) => ImportStats;
   cancelImport: () => void;
   importError: string | null;
   dismissImportError: () => void;
   exportCollection: () => void;
-  pendingExport: boolean;
+  pendingExport: "choose" | "postman" | "openapi" | null;
+  chooseExportFormat: (format: "postman" | "openapi") => void;
   confirmExport: (selectedIds: Set<string>) => Promise<{ skippedGrpcCount: number } | null>;
   cancelExport: () => void;
-  compareOpen: boolean;
-  openCompare: () => void;
-  closeCompare: () => void;
   // Set to force the Environments modal open on a specific tab ("globals"
   // or an environment id), optionally scrolling to and flashing one
   // variable row — used by the {{variable}} click-to-navigate feature,
@@ -109,8 +111,6 @@ interface Ctx {
   curlImportParentId: string | null;
   openCurlImport: (parentId: string | null) => void;
   closeCurlImport: () => void;
-  pauseAutosave: () => void;
-  resumeAutosave: () => void;
   moveNodes: (nodeIds: string[], targetId: string, position: "before" | "after" | "inside") => void;
   addGrpcRequest: (parentId: string | null) => string;
   importGrpcApi: (parentId: string | null, apiName: string, url: string, services: GrpcApiImportService[]) => { folderId: string; requestCount: number };
@@ -149,7 +149,6 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [openTick, setOpenTick] = useState(0);
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
-  const [compareOpen, setCompareOpen] = useState(false);
   const [runnerOpen, setRunnerOpen] = useState(false);
   const [envModalTarget, setEnvModalTarget] = useState<{ tab: string; key?: string } | null>(null);
   const [curlImportOpen, setCurlImportOpen] = useState(false);
@@ -157,7 +156,6 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const loaded = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveArgsRef = useRef<{ dir: string; data: string; hidden: boolean } | null>(null);
-  const autosavePausedRef = useRef(false);
   const grpcCancelRefs = useRef<Map<string, { current: boolean; requestId?: string }>>(new Map());
 
   const { cookies, setCookies } = useCookieJar(workspaceDir);
@@ -170,6 +168,9 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     useTreeActions(workspace, setWorkspace, setTabs, setActiveTabId);
   const {
     importCollection,
+    importVariables,
+    exportVariables,
+    importBrunoCollection,
     importIntoFolder,
     pendingImport,
     confirmImport,
@@ -177,6 +178,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     importError,
     dismissImportError,
     exportCollection,
+    chooseExportFormat,
     pendingExport,
     confirmExport,
     cancelExport,
@@ -216,14 +218,6 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       saveTimerRef.current = null;
-      // Skip while paused (see pauseAutosave) — a stage/commit flow writes
-      // specific files directly to disk outside React state; if this timer
-      // fires mid-sequence, its full-tree rewrite (from the in-memory draft)
-      // would silently clobber a carefully-merged partial-field file before
-      // `git add` ever reads it, dragging unselected field changes into the
-      // commit. pendingSaveArgsRef keeps the latest args for resumeAutosave
-      // to flush once it's safe.
-      if (autosavePausedRef.current) return;
       const args = pendingSaveArgsRef.current;
       if (args) saveWorkspaceDir(args.dir, args.data, args.hidden).catch(() => {});
     }, 500);
@@ -239,20 +233,6 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         if (args) saveWorkspaceDir(args.dir, args.data, args.hidden).catch(() => {});
       }
     };
-  }, []);
-
-  const pauseAutosave = useCallback(() => {
-    autosavePausedRef.current = true;
-  }, []);
-
-  // Flushes the latest in-memory draft to disk (harmless/idempotent — by
-  // this point any direct file writes from a paused operation are done, so
-  // this just re-syncs everything to what React already believes is true)
-  // before letting the debounced autosave resume normal operation.
-  const resumeAutosave = useCallback(() => {
-    autosavePausedRef.current = false;
-    const args = pendingSaveArgsRef.current;
-    if (args) saveWorkspaceDir(args.dir, args.data, args.hidden).catch(() => {});
   }, []);
 
   // Strictly for opening a workspace that already exists — kept separate
@@ -450,10 +430,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     [pendingCloseId, saveTab, forceCloseTab]
   );
 
-  const openCompare = useCallback(() => setCompareOpen(true), []);
   const openRunner = useCallback(() => setRunnerOpen(true), []);
   const closeRunner = useCallback(() => setRunnerOpen(false), []);
-  const closeCompare = useCallback(() => setCompareOpen(false), []);
   const openEnvironmentModal = useCallback((tab: string, key?: string) => setEnvModalTarget({ tab, key }), []);
   const closeEnvironmentModal = useCallback(() => setEnvModalTarget(null), []);
   const openCurlImport = useCallback((parentId: string | null) => {
@@ -500,8 +478,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     async (id: string) => {
       const tab = tabs.find((item) => item.nodeId === id);
       if (!tab || tab.kind !== "grpc") return;
-      const variables = workspaceVariableValues(workspace);
-      const resolvedUrl = substituteVars(tab.draft.url, variables) ?? tab.draft.url;
+      const variables = Object.fromEntries(activeVariableRows(workspace).map((row) => [row.key, row.value]));
+      const resolvedUrl = resolveWorkspaceAddress(tab.draft.url, workspace);
       const resolvedMessageJson = substituteVars(tab.draft.messageJson, variables) ?? tab.draft.messageJson;
       const resolvedMetadata: [string, string][] = tab.draft.metadata
         .filter((item) => item.enabled && item.key.trim())
@@ -744,6 +722,9 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setActiveEnvironment,
       setEnvironmentVariables,
       importCollection,
+      importVariables,
+      exportVariables,
+      importBrunoCollection,
       importIntoFolder,
       pendingImport,
       confirmImport,
@@ -751,12 +732,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       importError,
       dismissImportError,
       exportCollection,
+      chooseExportFormat,
       pendingExport,
       confirmExport,
       cancelExport,
-      compareOpen,
-      openCompare,
-      closeCompare,
       applyVariableChanges,
       runnerOpen,
       openRunner,
@@ -768,12 +747,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       curlImportParentId,
       openCurlImport,
       closeCurlImport,
-      pauseAutosave,
-      resumeAutosave,
       moveNodes,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, importGrpcApi, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, cancelGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, pendingExport, confirmExport, cancelExport, compareOpen, openCompare, closeCompare, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, pauseAutosave, resumeAutosave, moveNodes, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, importGrpcApi, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, cancelGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importVariables, exportVariables, importBrunoCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, chooseExportFormat, pendingExport, confirmExport, cancelExport, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, moveNodes, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

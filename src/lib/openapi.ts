@@ -171,7 +171,8 @@ function requestBodyFor(operation: any, spec: any): Pick<RequestNode["request"],
 }
 
 export function parseOpenApiSpec(spec: any): { tree: TreeNode[]; name: string; variables: KVRow[] } {
-  const baseUrl = (spec.servers?.[0]?.url || "").replace(/\/$/, "");
+  const primaryServer = spec.servers?.[0];
+  const baseUrl = (primaryServer?.url || "").replace(/\{([^}]+)\}/g, "{{$1}}").replace(/\/$/, "");
   const auth = resolveGlobalAuth(spec);
   const groups = new Map<string, RequestNode[]>();
 
@@ -244,6 +245,165 @@ export function parseOpenApiSpec(spec: any): { tree: TreeNode[]; name: string; v
     children,
   }));
 
-  const variables: KVRow[] = auth.variables ?? [];
+  const serverVariables: KVRow[] = Object.entries<any>(primaryServer?.variables || {}).map(([key, config]) => ({
+    id: uid(), key, value: String(config?.default ?? ""), enabled: true, description: config?.description || "",
+  }));
+  const variables = [...serverVariables];
+  for (const variable of auth.variables ?? []) {
+    if (!variables.some((existing) => existing.key.toLowerCase() === variable.key.toLowerCase())) variables.push(variable);
+  }
   return { tree, name: spec.info?.title || "Imported API", variables };
+}
+
+function inferSchema(value: any): any {
+  if (value === null) return { nullable: true };
+  if (Array.isArray(value)) return { type: "array", items: value.length ? inferSchema(value[0]) : {} };
+  if (typeof value === "object") {
+    return { type: "object", properties: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, inferSchema(item)])) };
+  }
+  if (typeof value === "boolean") return { type: "boolean", example: value };
+  if (typeof value === "number") return { type: Number.isInteger(value) ? "integer" : "number", example: value };
+  return { type: "string", ...(value === "" ? {} : { example: String(value) }) };
+}
+
+function schemaFromText(text: string): { schema: any; example?: any } {
+  try {
+    const parsed = JSON.parse(text);
+    return { schema: inferSchema(parsed), example: parsed };
+  } catch {
+    return { schema: { type: "string" }, ...(text ? { example: text } : {}) };
+  }
+}
+
+function relayUrlParts(rawUrl: string): { server?: string; path: string } {
+  const withoutQuery = rawUrl.split("?")[0];
+  const absolute = /^(https?:\/\/[^/]+)(\/.*)?$/i.exec(withoutQuery);
+  if (absolute) return { server: absolute[1].replace(/\{\{([^}]+)\}\}/g, "{$1}"), path: absolute[2] || "/" };
+  const variableServer = /^(\{\{[^}]+\}\})(\/.*)?$/.exec(withoutQuery);
+  if (variableServer) return { server: variableServer[1].replace(/^\{\{([^}]+)\}\}$/, "{$1}"), path: variableServer[2] || "/" };
+  return { path: withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}` };
+}
+
+function openApiPath(path: string): string {
+  return path.replace(/:([A-Za-z_]\w*)/g, "{$1}");
+}
+
+function parameterSchema(value: string): any {
+  if (/^-?\d+$/.test(value)) return { type: "integer", ...(value ? { example: Number(value) } : {}) };
+  if (/^-?\d+\.\d+$/.test(value)) return { type: "number", ...(value ? { example: Number(value) } : {}) };
+  if (value === "true" || value === "false") return { type: "boolean", example: value === "true" };
+  return { type: "string", ...(value ? { example: value } : {}) };
+}
+
+function requestBodyToOpenApi(req: RequestNode["request"]): any | undefined {
+  if (req.bodyMode === "json") {
+    const parsed = schemaFromText(req.bodyText);
+    return { content: { "application/json": { schema: parsed.schema, ...(parsed.example !== undefined ? { example: parsed.example } : {}) } } };
+  }
+  if (req.bodyMode === "text") {
+    return { content: { "text/plain": { schema: { type: "string" }, ...(req.bodyText ? { example: req.bodyText } : {}) } } };
+  }
+  const rows = req.bodyMode === "form-data" ? req.bodyForm : req.bodyMode === "urlencoded" ? req.bodyUrlencoded : null;
+  if (!rows) return undefined;
+  const properties = Object.fromEntries(rows.filter((row) => row.enabled && row.key.trim()).map((row) => {
+    const isFile = req.bodyMode === "form-data" && "type" in row && row.type === "file";
+    return [row.key, isFile ? { type: "string", format: "binary" } : parameterSchema(row.value)];
+  }));
+  const mediaType = req.bodyMode === "form-data" ? "multipart/form-data" : "application/x-www-form-urlencoded";
+  return { content: { [mediaType]: { schema: { type: "object", properties } } } };
+}
+
+function responsesToOpenApi(req: RequestNode["request"]): Record<string, any> {
+  if (!req.examples.length) return { "200": { description: "Successful response" } };
+  const responses: Record<string, any> = {};
+  for (const example of req.examples) {
+    const status = String(example.status || 200);
+    const contentType = example.headers.find(([key]) => key.toLowerCase() === "content-type")?.[1]?.split(";")[0] || "application/json";
+    const parsed = schemaFromText(example.body);
+    const response = responses[status] ?? { description: example.name || "Response", content: {} };
+    const media = response.content[contentType] ?? { schema: parsed.schema, examples: {} };
+    media.examples[example.scenarioKey || example.id] = { summary: example.name, value: parsed.example ?? example.body };
+    response.content[contentType] = media;
+    responses[status] = response;
+  }
+  return responses;
+}
+
+function serverObject(url: string, variables: KVRow[]): any {
+  const names = [...url.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+  if (!names.length) return { url };
+  return {
+    url,
+    variables: Object.fromEntries(names.map((name) => {
+      const variable = variables.find((row) => row.key === name);
+      return [name, { default: variable ? (variable.secret ? "" : variable.value) : "localhost" }];
+    })),
+  };
+}
+
+export function treeToOpenApi(
+  tree: TreeNode[],
+  name: string,
+  variables: KVRow[] = []
+): { document: any; skippedGrpcCount: number } {
+  const paths: Record<string, any> = {};
+  const tagNames = new Set<string>();
+  const securitySchemes: Record<string, any> = {};
+  let skippedGrpcCount = 0;
+
+  const visit = (nodes: TreeNode[], folders: string[]) => {
+    for (const node of nodes) {
+      if (node.kind === "folder") { visit(node.children, [...folders, node.name]); continue; }
+      if (node.kind === "grpc") { skippedGrpcCount++; continue; }
+      const req = node.request;
+      const { server, path: rawPath } = relayUrlParts(req.url);
+      const path = openApiPath(rawPath || "/");
+      const tag = folders.join(" / ");
+      if (tag) tagNames.add(tag);
+      const parameters: any[] = [];
+      for (const row of req.pathParams.filter((item) => item.key.trim())) {
+        parameters.push({ name: row.key, in: "path", required: true, ...(row.description ? { description: row.description } : {}), schema: parameterSchema(row.value) });
+      }
+      for (const row of req.params.filter((item) => item.key.trim())) {
+        parameters.push({ name: row.key, in: "query", required: false, ...(row.description ? { description: row.description } : {}), schema: parameterSchema(row.value), ...(row.enabled ? {} : { "x-relay-disabled": true }) });
+      }
+      for (const row of req.headers.filter((item) => item.key.trim())) {
+        parameters.push({ name: row.key, in: "header", required: false, ...(row.description ? { description: row.description } : {}), schema: parameterSchema(row.value), ...(row.enabled ? {} : { "x-relay-disabled": true }) });
+      }
+      let security: any[] | undefined;
+      if (req.auth.type === "bearer") {
+        securitySchemes.BearerAuth = { type: "http", scheme: "bearer" }; security = [{ BearerAuth: [] }];
+      } else if (req.auth.type === "basic") {
+        securitySchemes.BasicAuth = { type: "http", scheme: "basic" }; security = [{ BasicAuth: [] }];
+      }
+      const operation: any = {
+        summary: node.name,
+        operationId: node.id.replace(/[^A-Za-z0-9_]/g, "_"),
+        ...(req.description ? { description: req.description } : {}),
+        ...(tag ? { tags: [tag] } : {}),
+        ...(parameters.length ? { parameters } : {}),
+        ...(requestBodyToOpenApi(req) ? { requestBody: requestBodyToOpenApi(req) } : {}),
+        responses: responsesToOpenApi(req),
+        ...(server ? { servers: [serverObject(server, variables)] } : {}),
+        ...(security ? { security } : {}),
+      };
+      const method = req.method.toLowerCase();
+      paths[path] ??= {};
+      if (paths[path][method]) {
+        const duplicates = paths[path][method]["x-relay-duplicates"] ?? [];
+        paths[path][method]["x-relay-duplicates"] = [...duplicates, operation];
+      } else {
+        paths[path][method] = operation;
+      }
+    }
+  };
+  visit(tree, []);
+  const document: any = {
+    openapi: "3.0.3",
+    info: { title: name, version: "1.0.0" },
+    paths,
+    ...(tagNames.size ? { tags: [...tagNames].map((tag) => ({ name: tag })) } : {}),
+    ...(Object.keys(securitySchemes).length ? { components: { securitySchemes } } : {}),
+  };
+  return { document, skippedGrpcCount };
 }

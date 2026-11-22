@@ -2,13 +2,13 @@
 
 A lightweight, Postman-style desktop API client — built with **Tauri v2 + React + TypeScript + Rust**.
 
-Requests run **natively through Rust** (`reqwest` for HTTP, `tonic`/`prost` for gRPC) instead of a browser's `fetch()` — no CORS restrictions, and lighter/faster than a webview-based or Electron app. Collections are stored as **plain-text `.relay` files**, so diffs stay small and workspaces version cleanly with git.
+Requests run **natively through Rust** (`reqwest` for HTTP, `tonic`/`prost` for gRPC) instead of a browser's `fetch()` — no CORS restrictions, and lighter/faster than a webview-based or Electron app. Collections are stored as **plain-text `.relay` files** for easy backup and sharing.
 
 <!-- TODO(image): banner/hero screenshot of the app here -->
 
 ## Why Relay
 
-- **Git-native by design** — one file per request/folder/environment, not a single JSON blob. Reviewable diffs, no merge-conflict nightmares.
+- **File-based storage** — one file per request, folder, and environment.
 - **Native networking** — real Rust HTTP/gRPC clients, not a sandboxed webview fetch.
 - **No account required to use it** — core HTTP/gRPC client is fully local and free.
 
@@ -36,16 +36,14 @@ Requests run **natively through Rust** (`reqwest` for HTTP, `tonic`/`prost` for 
 
 **Runner & CI**
 - **Runner**: run a folder/collection end-to-end with pass/fail summary
-- **Relay CLI** (`relay-cli`): headless collection runs for CI/CD pipelines
 - **Contract Check**: diff a live response against an OpenAPI spec
 
 **Mock Server**
 - Serve mock responses locally from a collection, no external server needed
 
-**Git-native storage**
+**Workspace storage**
 - `.relay` files, flat or hidden (`.relay/`) layout
-- Secret-marked variables split into a gitignored `*.secret.relay` file
-- Built-in Source Control panel (branch, changed files, commit)
+- Secret-marked variables split into a separate `*.secret.relay` file
 
 <!-- TODO(image): mock server / runner screenshot -->
 
@@ -87,10 +85,8 @@ src-tauri/                # backend — Rust
   src/
     commands.rs            # http_request command (reqwest)
     grpc.rs                 # gRPC reflection + local .proto parsing
-    storage.rs              # .relay folder read/write, git-ignore setup
-    git.rs                  # in-app git status/commit
+    storage.rs              # .relay folder read/write
     mock_server.rs          # local mock server
-  relay-cli/                # headless CLI, reuses the same Rust core
 ```
 
 ## Contributing

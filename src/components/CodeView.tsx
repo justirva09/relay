@@ -41,8 +41,9 @@ function countDirectChildren(lines: string[], start: number, end: number): numbe
 }
 
 export default function CodeView({ value, className = "" }: Props) {
-  const isJson = useMemo(() => isJsonLike(value), [value]);
-  const lines = useMemo(() => value.split("\n"), [value]);
+  const largeBody = value.length > 200_000;
+  const isJson = useMemo(() => !largeBody && isJsonLike(value), [largeBody, value]);
+  const lines = useMemo(() => largeBody ? [] : value.split("\n"), [largeBody, value]);
   const folds = useMemo(() => (isJson ? computeFolds(lines) : new Map<number, number>()), [isJson, lines]);
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
 
@@ -51,9 +52,10 @@ export default function CodeView({ value, className = "" }: Props) {
   }, [value]);
 
   const htmlLines = useMemo(() => {
+    if (largeBody) return [];
     const highlighted = isJson ? highlightJSON(value) : highlightJS(value);
     return highlighted.replace(/\n$/, "").split("\n");
-  }, [isJson, value]);
+  }, [isJson, largeBody, value]);
 
   const gutterWidth = Math.max(2, String(lines.length).length) + 5;
 
@@ -111,5 +113,8 @@ export default function CodeView({ value, className = "" }: Props) {
     i = isCollapsed && foldEnd !== undefined ? foldEnd + 1 : lineIndex + 1;
   }
 
+  if (largeBody) {
+    return <pre className={`overflow-auto px-3 py-2 text-[12.5px] font-mono text-th-text-1 whitespace-pre-wrap break-words ${className}`}>{value}</pre>;
+  }
   return <div className={`overflow-auto py-2 ${className}`}>{rows}</div>;
 }

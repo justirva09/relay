@@ -7,11 +7,10 @@ import KeyValueEditor from "../KeyValueEditor";
 import GrpcServicePicker from "./GrpcServicePicker";
 import FloatingMenu from "../FloatingMenu";
 import { useWorkspace } from "../../store";
-import { substituteVars, workspaceVariableValues } from "../../lib/pm";
-import { VariableGroup } from "../../lib/useVariableMenu";
 import { buildVariableInfo } from "../../lib/useVariableHover";
 import UrlInput from "../requestPanel/UrlInput";
 import ToggleSwitch from "../ToggleSwitch";
+import { activeVariableGroups, resolveWorkspaceAddress } from "../../lib/variableResolution";
 
 function indent(text: string): string {
   return text
@@ -275,19 +274,9 @@ function randomGrpcSampleSeed(): number {
 
 export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel, protoFiles, onImportProto, onRemoveProto }: Props) {
   const { workspace } = useWorkspace();
-  const variableGroups = useMemo(() => {
-    const groups: VariableGroup[] = [];
-    const globalNames = workspace.variables.filter((variable) => variable.key.trim()).map((variable) => variable.key);
-    if (globalNames.length) groups.push({ category: "Global", names: globalNames });
-    for (const environment of workspace.environments) {
-      const names = environment.variables.filter((variable) => variable.key.trim()).map((variable) => variable.key);
-      if (names.length) groups.push({ category: environment.name, names });
-    }
-    return groups;
-  }, [workspace.variables, workspace.environments]);
+  const resolvedUrl = resolveWorkspaceAddress(draft.url, workspace);
+  const variableGroups = useMemo(() => activeVariableGroups(workspace), [workspace]);
   const variableInfo = useMemo(() => buildVariableInfo(workspace), [workspace]);
-  const variableValues = useMemo(() => workspaceVariableValues(workspace), [workspace]);
-  const resolvedUrl = substituteVars(draft.url, variableValues) ?? draft.url;
   const [tab, setTab] = useState<"message" | "metadata" | "settings" | "definition">("message");
   const [serviceFiles, setServiceFiles] = useState<Set<string>>(new Set());
   const [schemaFields, setSchemaFields] = useState<ProtoFieldSchema[] | undefined>(undefined);

@@ -13,7 +13,7 @@ export function GeneralSection() {
         <div>
           <p className="text-[11px] font-mono text-th-text-3 uppercase tracking-wide mb-2">Workspace Folder</p>
           <p className="text-[12px] text-th-text-3 mb-2">
-            Requests, folders, and environments are stored as plain-text <span className="font-mono">.relay</span> files in this folder, so it can live in a git repo for diffs and team collaboration.
+            Requests, folders, and environments are stored as plain-text <span className="font-mono">.relay</span> files in this folder.
           </p>
           <div className="flex items-center justify-between bg-th-bg border border-th-border rounded-md px-3 py-2.5 gap-3">
             <span className="text-[12px] font-mono text-th-text-2 truncate">{workspaceDir || "Not set — changes are not saved to disk"}</span>

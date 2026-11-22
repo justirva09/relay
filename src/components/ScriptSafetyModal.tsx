@@ -27,7 +27,7 @@ export function ScriptSafetySettings() {
         </div>
         <p className="text-[12px] text-th-text-3 leading-relaxed pl-6">
           Scripts run inside an isolated sandbox — no access to your filesystem, and no way to call Relay's own
-          backend commands (Git, the mock server, file storage).
+          backend commands (the mock server and file storage).
         </p>
       </button>
 

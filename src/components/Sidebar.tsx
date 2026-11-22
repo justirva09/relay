@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { GrpcRequestNode, TreeNode } from "../types";
 import { useWorkspace } from "../store";
-import GitPanel from "./GitPanel";
 import CurlImportModal from "./CurlImportModal";
 import GrpcReflectionImportModal from "./grpc/GrpcReflectionImportModal";
 import GrpcMethodInfoModal from "./grpc/GrpcMethodInfoModal";
@@ -369,7 +368,6 @@ export default function Sidebar() {
         ))}
       </div>
 
-      <GitPanel />
 
       {dragCursor && draggingIds && draggingIds.size > 1 && (
         <div

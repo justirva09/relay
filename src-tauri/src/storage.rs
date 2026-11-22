@@ -75,10 +75,57 @@ pub fn list_proto_files_in_dir(dir: String) -> Result<Vec<ProtoFileInput>, Strin
     Ok(out)
 }
 
-// Git-native workspace storage (.relay): one deterministic JSON file per
+#[derive(serde::Serialize)]
+pub struct CollectionFileInput {
+    name: String,
+    content: String,
+}
+
+fn walk_collection_files(root: &Path, dir: &Path, out: &mut Vec<CollectionFileInput>) -> Result<(), String> {
+    let yaml_collection = root.join("opencollection.yml").exists() || root.join("opencollection.yaml").exists();
+    for entry in fs::read_dir(dir).map_err(|e| format!("Failed to read {}: {}", dir.display(), e))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            if entry.file_name() != ".git" && entry.file_name() != "node_modules" {
+                walk_collection_files(root, &path, out)?;
+            }
+            continue;
+        }
+        let file_name = entry.file_name();
+        let is_marker = file_name == "bruno.json" || file_name == "opencollection.yml" || file_name == "opencollection.yaml";
+        let is_bru = path.extension().and_then(|value| value.to_str()) == Some("bru");
+        let is_yaml = yaml_collection && matches!(path.extension().and_then(|value| value.to_str()), Some("yml" | "yaml"));
+        if !is_marker && !is_bru && !is_yaml {
+            continue;
+        }
+        let relative = path.strip_prefix(root).map_err(|e| e.to_string())?
+            .components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+        let content = fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        out.push(CollectionFileInput { name: relative, content });
+    }
+    Ok(())
+}
+
+/// Reads only Bruno collection source files from a user-selected directory.
+#[tauri::command]
+pub fn list_bruno_files_in_dir(dir: String) -> Result<Vec<CollectionFileInput>, String> {
+    let root = Path::new(&dir);
+    if !root.join("bruno.json").exists() && !root.join("opencollection.yml").exists() && !root.join("opencollection.yaml").exists() {
+        return Err("Select the Bruno collection root containing bruno.json or opencollection.yml".to_string());
+    }
+    let mut out = Vec::new();
+    walk_collection_files(root, root, &mut out)?;
+    Ok(out)
+}
+
+// Workspace storage (.relay): one deterministic JSON file per
 // request/folder/environment instead of one big blob. Stable slugs and
-// sorted keys keep untouched nodes byte-identical across saves, so git
-// diffs only show what actually changed.
+// sorted keys keep untouched nodes byte-identical across saves.
 
 fn slugify(name: &str) -> String {
     let mut out = String::new();
@@ -643,6 +690,22 @@ mod tests {
         assert_eq!(api_key["value"], "sk-supersecret", "secret value must merge back on load");
         let host = vars.iter().find(|v| v["key"] == "host").unwrap();
         assert_eq!(host["value"], "api.example.com");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bruno_reader_only_returns_collection_sources() {
+        let dir = tmp_dir("bruno-import");
+        fs::create_dir_all(dir.join("users")).unwrap();
+        fs::write(dir.join("bruno.json"), r#"{"name":"Demo"}"#).unwrap();
+        fs::write(dir.join("users").join("get.bru"), "get {\n url: https://example.com\n}").unwrap();
+        fs::write(dir.join("users").join("notes.txt"), "do not import").unwrap();
+
+        let files = list_bruno_files_in_dir(dir.to_string_lossy().to_string()).unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|file| file.name == "bruno.json"));
+        assert!(files.iter().any(|file| file.name == "users/get.bru"));
 
         fs::remove_dir_all(&dir).ok();
     }

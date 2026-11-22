@@ -6,7 +6,6 @@ import ResponsePanel from "./components/ResponsePanel";
 import GrpcPanel from "./components/grpc/GrpcPanel";
 import GrpcResponsePanel from "./components/grpc/GrpcResponsePanel";
 import OverviewPage from "./components/OverviewPage";
-import BranchComparePanel from "./components/BranchComparePanel";
 import RunnerPanel from "./components/RunnerPanel";
 import { EnvironmentBar } from "./components/EnvironmentModal";
 import { WorkspaceProvider, useWorkspace } from "./store";
@@ -88,7 +87,7 @@ function findFolderName(nodes: TreeNode[], id: string): string | null {
 // since import can be triggered either from Settings (whole-collection) or
 // from the Sidebar's per-folder "Import Here" menu.
 function ImportExportModals() {
-  const { workspace, pendingImport, confirmImport, cancelImport, pendingExport, confirmExport, cancelExport, importError, dismissImportError } = useWorkspace();
+  const { workspace, pendingImport, confirmImport, cancelImport, pendingExport, chooseExportFormat, confirmExport, cancelExport, importError, dismissImportError } = useWorkspace();
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
@@ -98,33 +97,75 @@ function ImportExportModals() {
   }, [toast]);
 
   const targetFolderName = pendingImport?.targetFolderId ? findFolderName(workspace.tree, pendingImport.targetFolderId) : null;
+  const importVariableConflicts = pendingImport
+    ? pendingImport.variables.filter((incoming) => workspace.variables.some((existing) => existing.key.toLowerCase() === incoming.key.toLowerCase())).length
+    : 0;
+  const importEnvironmentConflicts = pendingImport
+    ? pendingImport.environments.filter((incoming) => workspace.environments.some((existing) => existing.name.toLowerCase() === incoming.name.toLowerCase())).length
+    : 0;
 
   return (
     <>
       {pendingImport && (
         <TreePickerModal
           tree={pendingImport.tree}
-          title={targetFolderName ? `Select requests to import into "${targetFolderName}"` : "Select requests to import"}
+          title={targetFolderName ? `Import ${pendingImport.source} into "${targetFolderName}"` : `Import ${pendingImport.source}`}
           confirmLabel="Import"
+          allowEmpty={pendingImport.tree.length === 0}
+          summary={(
+            <div className="space-y-2 text-[11.5px] text-th-text-2">
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                <span><b className="text-th-text-1">{pendingImport.variables.length}</b> global variables</span>
+                <span><b className="text-th-text-1">{pendingImport.environments.length}</b> environments</span>
+              </div>
+              {(importVariableConflicts > 0 || importEnvironmentConflicts > 0) && (
+                <p className="text-amber-400">
+                  Existing values stay unchanged: {importVariableConflicts} variable conflict{importVariableConflicts === 1 ? "" : "s"}, {importEnvironmentConflicts} environment name match{importEnvironmentConflicts === 1 ? "" : "es"}.
+                </p>
+              )}
+            </div>
+          )}
           onConfirm={(ids) => {
             const stats = confirmImport(ids);
-            setToast(`Sync import: ${stats.added} added, ${stats.updated} updated.`);
+            setToast(`Import complete: ${stats.added} requests added, ${stats.updated} updated, ${stats.variablesAdded} globals added, ${stats.environmentsAdded} environments added, ${stats.environmentsMerged} merged.`);
           }}
           onCancel={cancelImport}
         />
       )}
-      {pendingExport && (
+      {pendingExport === "choose" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-th-overlay" onClick={cancelExport}>
+          <div className="bg-th-surface border border-th-border rounded-lg shadow-2xl w-[420px] p-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-[13.5px] font-semibold text-th-text-1 mb-1">Export format</h3>
+            <p className="text-[12px] text-th-text-3 mb-4">Choose a format, then select the requests to include.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => chooseExportFormat("postman")} className="text-left p-3 rounded-md border border-th-border-input bg-th-bg hover:border-th-accent-border">
+                <span className="block text-[13px] font-medium text-th-text-1">Postman Collection</span>
+                <span className="block text-[11.5px] text-th-text-3 mt-1">Collection schema v2.1</span>
+              </button>
+              <button onClick={() => chooseExportFormat("openapi")} className="text-left p-3 rounded-md border border-th-border-input bg-th-bg hover:border-th-accent-border">
+                <span className="block text-[13px] font-medium text-th-text-1">OpenAPI 3.0</span>
+                <span className="block text-[11.5px] text-th-text-3 mt-1">JSON specification (3.0.3)</span>
+              </button>
+            </div>
+            <div className="flex justify-end mt-4">
+              <button onClick={cancelExport} className="text-[12.5px] px-3 py-1.5 rounded text-th-text-2 hover:bg-th-hover">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {(pendingExport === "postman" || pendingExport === "openapi") && (
         <TreePickerModal
           tree={workspace.tree}
-          title="Select requests to export"
+          title={`Select requests to export as ${pendingExport === "openapi" ? "OpenAPI 3.0" : "Postman"}`}
           confirmLabel="Export"
           onConfirm={async (ids) => {
+            const format = pendingExport;
             const result = await confirmExport(ids);
             if (!result) return;
             setToast(
               result.skippedGrpcCount > 0
-                ? `Collection exported. ${result.skippedGrpcCount} gRPC request${result.skippedGrpcCount === 1 ? "" : "s"} skipped — Postman does not support gRPC in collection exports.`
-                : "Collection exported."
+                ? `${format === "openapi" ? "OpenAPI spec" : "Postman collection"} exported. ${result.skippedGrpcCount} gRPC request${result.skippedGrpcCount === 1 ? "" : "s"} skipped.`
+                : `${format === "openapi" ? "OpenAPI spec" : "Postman collection"} exported.`
             );
           }}
           onCancel={cancelExport}
@@ -189,7 +230,7 @@ function WorkspaceSetupModal() {
       >
         <h3 className="text-[14px] font-semibold text-th-text-1 mb-2">Name This Workspace</h3>
         <p className="text-[12.5px] text-th-text-3 mb-4">
-          Stored inside the workspace files, so it shows up the same for everyone who clones this folder from git.
+          Stored inside the workspace files, so everyone using this folder sees the same setting.
         </p>
         <input
           autoFocus
@@ -271,7 +312,7 @@ function WorkspaceFolderBanner() {
 }
 
 function Main() {
-  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, cancelGrpcTab, setProtoLibrary, compareOpen, closeCompare, openCompare, runnerOpen, openRunner, closeRunner, closeTab, closeAllTabs, setActiveTab } = useWorkspace();
+  const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, cancelGrpcTab, setProtoLibrary, runnerOpen, openRunner, closeRunner, closeTab, closeAllTabs, setActiveTab } = useWorkspace();
   const activeTab = tabs.find((t) => t.nodeId === activeTabId) || null;
   const { responseLayout } = useLayout();
   const [showOverview, setShowOverview] = useState(false);
@@ -292,29 +333,21 @@ function Main() {
     if (openTick > 0) setShowOverview(false);
   }, [openTick]);
 
-  // Same reasoning applies to Compare — it took over the whole content area,
-  // so clicking any request in the sidebar should dismiss it like every
-  // other full-area view does, not leave it stuck until the X is clicked.
-  useEffect(() => {
-    if (openTick > 0) closeCompare();
-  }, [openTick, closeCompare]);
-
   // Same reasoning applies to the Runner.
   useEffect(() => {
     if (openTick > 0) closeRunner();
   }, [openTick, closeRunner]);
 
   useEffect(() => {
-    if (!compareOpen && !runnerOpen) return;
+    if (!runnerOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        closeCompare();
         closeRunner();
       }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [compareOpen, closeCompare, runnerOpen, closeRunner]);
+  }, [runnerOpen, closeRunner]);
 
   const [splitWidth, setSplitWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem("relay-split-width"));
@@ -358,11 +391,10 @@ function Main() {
         if (activeTab.kind === "grpc") sendGrpcTab(activeTab.nodeId);
         else sendTab(activeTab.nodeId);
       }),
-      registerAction("view.compareBranches", () => openCompare()),
       registerAction("view.runner", () => openRunner()),
     ];
     return () => unregisters.forEach((u) => u());
-  }, [activeTabId, tabs, activeTab, saveTab, closeTab, closeAllTabs, setActiveTab, sendTab, sendGrpcTab, openCompare, openRunner]);
+  }, [activeTabId, tabs, activeTab, saveTab, closeTab, closeAllTabs, setActiveTab, sendTab, sendGrpcTab, openRunner]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -539,15 +571,13 @@ function Main() {
         <TabBar />
         {runnerOpen ? (
           <RunnerPanel onClose={closeRunner} />
-        ) : compareOpen ? (
-          <BranchComparePanel onClose={closeCompare} />
         ) : !activeTab || showOverview ? (
           <OverviewPage />
         ) : (
           <div ref={containerRef} className={`flex-1 flex min-h-0 ${responseLayout === "bottom" ? "flex-col" : ""}`}>
             {responseLayout === "side" ? (
               <>
-                <div className="overflow-y-auto overflow-x-hidden min-h-0 shrink-0" style={{ width: splitWidth }}>
+                <div className={`min-h-0 shrink-0 ${activeTab.kind === "grpc" ? "overflow-y-auto overflow-x-hidden" : "overflow-hidden"}`} style={{ width: splitWidth }}>
                   {renderTopPanel()}
                 </div>
                 <div
@@ -560,7 +590,7 @@ function Main() {
               </>
             ) : (
               <>
-                <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
+                <div className={`flex-1 min-h-0 min-w-0 ${activeTab.kind === "grpc" ? "overflow-y-auto overflow-x-hidden" : "overflow-hidden"}`}>
                   {renderTopPanel()}
                 </div>
                 <div

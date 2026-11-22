@@ -480,10 +480,55 @@ mark.search-hl.search-hl-current {
   --c-syn-null: #ef9a9a;
 }
 
+/* Syntax palettes can be combined with any appearance theme. */
+[data-syntax-palette="vivid"] {
+  --c-syn-key: #ff79c6;
+  --c-syn-string: #50fa9b;
+  --c-syn-number: #bd93f9;
+  --c-syn-bool: #8be9fd;
+  --c-syn-null: #ffb86c;
+}
+[data-syntax-palette="warm"] {
+  --c-syn-key: #ffd166;
+  --c-syn-string: #ff9e80;
+  --c-syn-number: #f6c177;
+  --c-syn-bool: #c9a7ff;
+  --c-syn-null: #ff7373;
+}
+[data-syntax-palette="ocean"] {
+  --c-syn-key: #8be9fd;
+  --c-syn-string: #7dd3c7;
+  --c-syn-number: #ffd27a;
+  --c-syn-bool: #a7b9ff;
+  --c-syn-null: #ff9caf;
+}
+[data-syntax-palette="vivid"]:is([data-theme="light"], [data-theme="light-monochrome"], [data-theme="light-pastel"], [data-theme="catppuccin-latte"], [data-theme="vscode-light"], [data-theme="material-light"]) {
+  --c-syn-key: #ad1457;
+  --c-syn-string: #087f5b;
+  --c-syn-number: #6f42c1;
+  --c-syn-bool: #0069a6;
+  --c-syn-null: #b45309;
+}
+[data-syntax-palette="warm"]:is([data-theme="light"], [data-theme="light-monochrome"], [data-theme="light-pastel"], [data-theme="catppuccin-latte"], [data-theme="vscode-light"], [data-theme="material-light"]) {
+  --c-syn-key: #8b4513;
+  --c-syn-string: #b44b3f;
+  --c-syn-number: #946200;
+  --c-syn-bool: #7652a8;
+  --c-syn-null: #b42318;
+}
+[data-syntax-palette="ocean"]:is([data-theme="light"], [data-theme="light-monochrome"], [data-theme="light-pastel"], [data-theme="catppuccin-latte"], [data-theme="vscode-light"], [data-theme="material-light"]) {
+  --c-syn-key: #096b84;
+  --c-syn-string: #087f75;
+  --c-syn-number: #986b0a;
+  --c-syn-bool: #4355a9;
+  --c-syn-null: #b63b65;
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;
   background: var(--c-bg);
+  overflow: hidden;
 }
 
 * {
@@ -504,59 +549,3 @@ html, body, #root {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--c-scrollbar-hover);
 }
-
-.markdown-body {
-  color: var(--c-text-1);
-  font-size: 13.5px;
-  line-height: 1.65;
-}
-.markdown-body > *:first-child { margin-top: 0; }
-.markdown-body > *:last-child { margin-bottom: 0; }
-.markdown-body h1, .markdown-body h2, .markdown-body h3 {
-  color: var(--c-text-1);
-  font-weight: 600;
-  margin: 1.2em 0 0.5em;
-  line-height: 1.3;
-}
-.markdown-body h1 { font-size: 1.35em; }
-.markdown-body h2 { font-size: 1.2em; }
-.markdown-body h3 { font-size: 1.05em; }
-.markdown-body p { margin: 0.6em 0; }
-.markdown-body ul, .markdown-body ol {
-  margin: 0.6em 0;
-  padding-left: 1.4em;
-}
-.markdown-body li { margin: 0.2em 0; }
-.markdown-body a { color: var(--c-accent-text); text-decoration: underline; }
-.markdown-body strong { color: var(--c-text-1); font-weight: 600; }
-.markdown-body code {
-  font-family: ui-monospace, monospace;
-  font-size: 0.9em;
-  background: var(--c-input);
-  border: 1px solid var(--c-border-input);
-  border-radius: 4px;
-  padding: 0.1em 0.4em;
-}
-.markdown-body pre {
-  background: var(--c-input);
-  border: 1px solid var(--c-border-input);
-  border-radius: 6px;
-  padding: 0.75em 1em;
-  overflow-x: auto;
-  margin: 0.6em 0;
-}
-.markdown-body pre code { background: none; border: none; padding: 0; }
-.markdown-body blockquote {
-  border-left: 3px solid var(--c-border-input);
-  margin: 0.6em 0;
-  padding: 0.1em 1em;
-  color: var(--c-text-2);
-}
-.markdown-body hr { border: none; border-top: 1px solid var(--c-border); margin: 1em 0; }
-.markdown-body table { border-collapse: collapse; margin: 0.6em 0; }
-.markdown-body th, .markdown-body td {
-  border: 1px solid var(--c-border);
-  padding: 0.4em 0.7em;
-  text-align: left;
-}
-.markdown-body th { color: var(--c-text-2); font-weight: 600; }

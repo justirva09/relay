@@ -1,4 +1,4 @@
-import { TreeNode, FolderNode, RequestNode, KVRow, Method, BodyMode, FormDataRow, AuthConfig, defaultAuth, defaultRequest, defaultRequestSettings, newRow, newFormDataRow, uid, parseQueryToRows, parsePathParamsFromUrl } from "../types";
+import { TreeNode, FolderNode, RequestNode, KVRow, Method, BodyMode, FormDataRow, AuthConfig, Environment, defaultAuth, defaultRequest, defaultRequestSettings, newRow, newFormDataRow, uid, parseQueryToRows, parsePathParamsFromUrl } from "../types";
 
 const POSTMAN_SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
 
@@ -104,11 +104,33 @@ interface PostmanItem {
 interface PostmanCollection {
   info?: { name?: string; schema?: string; _postman_id?: string };
   item?: PostmanItem[];
-  variable?: { key: string; value: string }[];
+  variable?: { key: string; value: string; type?: string; disabled?: boolean }[];
 }
 
 export function isPostmanCollection(data: any): data is PostmanCollection {
   return data?.info?.schema?.includes("getpostman.com") || (data?.info && Array.isArray(data?.item));
+}
+
+interface PostmanEnvironment {
+  id?: string;
+  name?: string;
+  values?: { key?: string; value?: unknown; enabled?: boolean; type?: string }[];
+  _postman_variable_scope?: string;
+}
+
+export function isPostmanEnvironment(data: any): data is PostmanEnvironment {
+  return Array.isArray(data?.values) && (data?._postman_variable_scope === "environment" || !data?.item);
+}
+
+export function postmanEnvironmentToRelay(data: PostmanEnvironment): Environment {
+  return {
+    id: uid(),
+    name: data.name || "Postman Environment",
+    variables: (data.values || []).map((item) => ({
+      id: uid(), key: item.key || "", value: typeof item.value === "string" ? item.value : JSON.stringify(item.value ?? ""),
+      enabled: item.enabled !== false, secret: item.type === "secret",
+    })),
+  };
 }
 
 export function isRelayWorkspace(data: any): boolean {
@@ -208,10 +230,13 @@ function parsePostmanItem(item: PostmanItem): TreeNode {
   return node;
 }
 
-export function postmanToTree(data: PostmanCollection): { tree: TreeNode[]; name: string } {
+export function postmanToTree(data: PostmanCollection): { tree: TreeNode[]; name: string; variables: KVRow[] } {
   const items = data.item || [];
   const tree = items.map(parsePostmanItem);
-  return { tree, name: data.info?.name || "Imported Collection" };
+  const variables = (data.variable || []).map((item) => ({
+    id: uid(), key: item.key, value: String(item.value ?? ""), enabled: !item.disabled, secret: item.type === "secret",
+  }));
+  return { tree, name: data.info?.name || "Imported Collection", variables };
 }
 
 function treeNodeToPostmanItem(node: TreeNode): PostmanItem | null {
@@ -289,7 +314,7 @@ function countGrpcNodes(nodes: TreeNode[]): number {
   return nodes.reduce((sum, n) => sum + (n.kind === "grpc" ? 1 : n.kind === "folder" ? countGrpcNodes(n.children) : 0), 0);
 }
 
-export function treeToPostman(tree: TreeNode[], name: string): { collection: PostmanCollection; skippedGrpcCount: number } {
+export function treeToPostman(tree: TreeNode[], name: string, variables: KVRow[] = []): { collection: PostmanCollection; skippedGrpcCount: number } {
   const skippedGrpcCount = countGrpcNodes(tree);
   const item = tree.map(treeNodeToPostmanItem).filter((x): x is PostmanItem => x !== null);
   return {
@@ -300,6 +325,9 @@ export function treeToPostman(tree: TreeNode[], name: string): { collection: Pos
         schema: POSTMAN_SCHEMA,
       },
       item,
+      variable: variables.filter((row) => row.key.trim()).map((row) => ({
+        key: row.key, value: row.secret ? "" : row.value, ...(row.secret ? { type: "secret" } : {}), ...(!row.enabled ? { disabled: true } : {}),
+      })),
     },
     skippedGrpcCount,
   };

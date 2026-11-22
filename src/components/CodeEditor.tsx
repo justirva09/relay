@@ -572,9 +572,9 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
   const lineCount = useMemo(() => Math.max(1, (value.match(/\n/g)?.length ?? 0) + 1), [value]);
   const gutterWidth = Math.max(2, String(lineCount).length);
 
-  const highlighted = value
-    ? (isJsonLike(value) ? highlightJSON(value) : highlightJS(value))
-    : `<span class="text-th-text-4">${escapeHtml(placeholder || "")}</span>`;
+  const highlighted = useMemo(() => value
+    ? (value.length > 200_000 ? escapeHtml(value) : isJsonLike(value) ? highlightJSON(value) : highlightJS(value))
+    : `<span class="text-th-text-4">${escapeHtml(placeholder || "")}</span>`, [value, placeholder]);
 
   return (
     <div className={`relative flex ${className}`}>

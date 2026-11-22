@@ -18,6 +18,13 @@ export type ThemeId =
   | "material-dark";
 
 export type AppearanceMode = "light" | "dark" | "system";
+export type SyntaxPalette = "theme" | "vivid" | "warm" | "ocean";
+export const SYNTAX_PALETTES: { id: SyntaxPalette; label: string }[] = [
+  { id: "theme", label: "Theme default" },
+  { id: "vivid", label: "Vivid" },
+  { id: "warm", label: "Warm" },
+  { id: "ocean", label: "Ocean" },
+];
 
 export const LIGHT_THEMES: { id: ThemeId; label: string }[] = [
   { id: "light", label: "Light" },
@@ -43,6 +50,7 @@ export const DARK_THEMES: { id: ThemeId; label: string }[] = [
 const MODE_KEY = "relay-appearance-mode";
 const LIGHT_KEY = "relay-theme-light";
 const DARK_KEY = "relay-theme-dark";
+const SYNTAX_KEY = "relay-syntax-palette";
 
 function isDarkThemeId(id: string): boolean {
   return DARK_THEMES.some((t) => t.id === id);
@@ -58,6 +66,8 @@ interface ThemeCtx {
   lightThemeId: ThemeId;
   darkThemeId: ThemeId;
   activeThemeId: ThemeId;
+  syntaxPalette: SyntaxPalette;
+  setSyntaxPalette: (palette: SyntaxPalette) => void;
   // not the same as appearanceMode === "dark", since "system" resolves to either
   isDark: boolean;
   selectTheme: (id: ThemeId) => void;
@@ -71,6 +81,8 @@ const ThemeContext = createContext<ThemeCtx>({
   lightThemeId: "light",
   darkThemeId: "dark",
   activeThemeId: "dark",
+  syntaxPalette: "theme",
+  setSyntaxPalette: () => {},
   isDark: true,
   selectTheme: () => {},
   toggleTheme: () => {},
@@ -80,6 +92,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [appearanceMode, setAppearanceModeState] = useState<AppearanceMode>(() => (localStorage.getItem(MODE_KEY) as AppearanceMode) || "dark");
   const [lightThemeId, setLightThemeId] = useState<ThemeId>(() => (localStorage.getItem(LIGHT_KEY) as ThemeId) || "light");
   const [darkThemeId, setDarkThemeId] = useState<ThemeId>(() => (localStorage.getItem(DARK_KEY) as ThemeId) || "dark");
+  const [syntaxPalette, setSyntaxPaletteState] = useState<SyntaxPalette>(() => {
+    const saved = localStorage.getItem(SYNTAX_KEY);
+    return SYNTAX_PALETTES.find((palette) => palette.id === saved)?.id ?? "theme";
+  });
   const [systemIsDark, setSystemIsDark] = useState(prefersDark);
 
   // only matters in "system" mode, keeps in sync if the OS setting changes mid-session
@@ -97,6 +113,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", activeThemeId);
   }, [activeThemeId]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-syntax-palette", syntaxPalette);
+  }, [syntaxPalette]);
+
+  const setSyntaxPalette = (palette: SyntaxPalette) => {
+    localStorage.setItem(SYNTAX_KEY, palette);
+    setSyntaxPaletteState(palette);
+  };
 
   const setAppearanceMode = (m: AppearanceMode) => {
     localStorage.setItem(MODE_KEY, m);
@@ -120,7 +145,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const toggleTheme = () => setAppearanceMode(isDark ? "light" : "dark");
 
   return (
-    <ThemeContext.Provider value={{ appearanceMode, setAppearanceMode, lightThemeId, darkThemeId, activeThemeId, isDark, selectTheme, toggleTheme }}>
+    <ThemeContext.Provider value={{ appearanceMode, setAppearanceMode, lightThemeId, darkThemeId, activeThemeId, syntaxPalette, setSyntaxPalette, isDark, selectTheme, toggleTheme }}>
       {children}
     </ThemeContext.Provider>
   );

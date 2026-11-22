@@ -5,6 +5,8 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 #[tauri::command]
 pub async fn http_request(payload: HttpRequestPayload) -> Result<HttpResponsePayload, String> {
     // Default User-Agent so APIs that reject unidentified clients (e.g. GitHub's REST API)
@@ -57,7 +59,11 @@ pub async fn http_request(payload: HttpRequestPayload) -> Result<HttpResponsePay
     }
 
     let start = Instant::now();
-    let res = req.send().await.map_err(|e| e.to_string())?;
+    let mut res = req.send().await.map_err(|e| e.to_string())?;
+
+    if res.content_length().is_some_and(|size| size > MAX_RESPONSE_BYTES as u64) {
+        return Err("Response exceeds the 16 MB display limit".to_string());
+    }
 
     let status = res.status();
     let headers: Vec<(String, String)> = res
@@ -66,7 +72,13 @@ pub async fn http_request(payload: HttpRequestPayload) -> Result<HttpResponsePay
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
 
-    let body_bytes = res.bytes().await.map_err(|e| e.to_string())?;
+    let mut body_bytes = Vec::new();
+    while let Some(chunk) = res.chunk().await.map_err(|e| e.to_string())? {
+        if chunk.len() > MAX_RESPONSE_BYTES.saturating_sub(body_bytes.len()) {
+            return Err("Response exceeds the 16 MB display limit".to_string());
+        }
+        body_bytes.extend_from_slice(&chunk);
+    }
     let time_ms = start.elapsed().as_millis();
     let body = String::from_utf8_lossy(&body_bytes).to_string();
 

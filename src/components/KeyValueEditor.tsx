@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import { KVRow, newRow, uid } from "../types";
 import { useVariableMenu, VariableGroup } from "../lib/useVariableMenu";
 import VariableMenuList from "./VariableMenuList";
@@ -109,10 +109,10 @@ export function ValueInput({ value, onChange, placeholder, variables, variableIn
   const modifierHeld = useModifierHeld();
 
   const syncScroll = () => {
-    requestAnimationFrame(() => {
-      if (inputRef.current && overlayRef.current) overlayRef.current.scrollLeft = inputRef.current.scrollLeft;
-    });
+    if (inputRef.current && overlayRef.current) overlayRef.current.scrollLeft = inputRef.current.scrollLeft;
   };
+
+  useLayoutEffect(syncScroll, [value]);
 
   const select = (item: string) => {
     const result = apply(value, item);
@@ -122,6 +122,7 @@ export function ValueInput({ value, onChange, placeholder, variables, variableIn
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       if (inputRef.current) inputRef.current.selectionStart = inputRef.current.selectionEnd = result.cursor;
+      syncScroll();
     });
   };
 
@@ -161,6 +162,7 @@ export function ValueInput({ value, onChange, placeholder, variables, variableIn
             if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) recompute(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length);
           }}
           onScroll={syncScroll}
+          onSelect={syncScroll}
           onFocus={() => { setFocused(true); syncScroll(); }}
           onBlur={() => { setFocused(false); close(); }}
           placeholder={placeholder}
