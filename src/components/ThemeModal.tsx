@@ -16,38 +16,81 @@ function ModeButton({ mode, current, onClick, children, title }: { mode: Appeara
   );
 }
 
-function ThemeColumn({ title, themes, activeId, isActiveColumn, onSelect }: {
+function ThemePreview({ id }: { id: ThemeId }) {
+  return (
+    <div
+      data-theme={id}
+      aria-hidden="true"
+      className="h-[96px] overflow-hidden rounded-md border text-left"
+      style={{ background: "var(--c-bg)", borderColor: "var(--c-border)", color: "var(--c-text-1)" }}
+    >
+      <div className="flex h-[16px] items-center gap-1 px-2 border-b" style={{ background: "var(--c-surface)", borderColor: "var(--c-border)" }}>
+        <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--c-accent)" }} />
+        <span className="h-1 w-1 rounded-full" style={{ background: "var(--c-text-4)" }} />
+        <span className="h-1 w-1 rounded-full" style={{ background: "var(--c-text-4)" }} />
+        <span className="ml-auto h-1 w-7 rounded-full" style={{ background: "var(--c-text-4)" }} />
+      </div>
+      <div className="flex h-[80px]">
+        <div className="w-[29%] shrink-0 border-r px-1.5 pt-2 space-y-2" style={{ background: "var(--c-sidebar)", borderColor: "var(--c-border)" }}>
+          <div className="h-1.5 w-4/5 rounded-full" style={{ background: "var(--c-text-2)" }} />
+          <div className="rounded-sm px-1 py-1" style={{ background: "var(--c-accent-bg)" }}>
+            <div className="h-1 w-full rounded-full" style={{ background: "var(--c-accent-text)" }} />
+          </div>
+          <div className="h-1 w-3/5 rounded-full" style={{ background: "var(--c-text-3)" }} />
+          <div className="h-1 w-4/5 rounded-full" style={{ background: "var(--c-text-3)" }} />
+        </div>
+        <div className="min-w-0 flex-1 px-2 pt-1.5">
+          <div className="flex items-center gap-1 border-b pb-1" style={{ borderColor: "var(--c-border)" }}>
+            <div className="h-1 w-8 rounded-full" style={{ background: "var(--c-text-2)" }} />
+            <div className="h-1 w-5 rounded-full" style={{ background: "var(--c-text-4)" }} />
+          </div>
+          <div className="mt-1.5 flex items-center gap-1">
+            <span className="rounded-sm px-1 py-[2px] text-[6px] font-bold leading-none" style={{ background: "var(--c-accent-bg)", color: "var(--c-accent-text)" }}>GET</span>
+            <div className="h-2 flex-1 rounded-sm border" style={{ background: "var(--c-input)", borderColor: "var(--c-border-input)" }} />
+            <div className="h-2 w-5 rounded-sm" style={{ background: "var(--c-accent)" }} />
+          </div>
+          <div className="mt-1.5 rounded-sm border px-1.5 py-1 space-y-1" style={{ background: "var(--c-surface)", borderColor: "var(--c-border)" }}>
+            <div className="h-1 w-2/3 rounded-full" style={{ background: "var(--c-text-2)" }} />
+            <div className="flex gap-1"><div className="h-1 w-1/4 rounded-full" style={{ background: "var(--c-syn-key)" }} /><div className="h-1 w-1/2 rounded-full" style={{ background: "var(--c-syn-string)" }} /></div>
+            <div className="flex gap-1"><div className="h-1 w-1/3 rounded-full" style={{ background: "var(--c-syn-bool)" }} /><div className="h-1 w-1/4 rounded-full" style={{ background: "var(--c-syn-number)" }} /></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThemeSection({ title, themes, activeId, isActiveSection, onSelect }: {
   title: string;
   themes: { id: ThemeId; label: string }[];
   activeId: ThemeId;
-  isActiveColumn: boolean;
+  isActiveSection: boolean;
   onSelect: (id: ThemeId) => void;
 }) {
   return (
-    <div className="flex-1 min-w-0">
-      <div className="flex items-center gap-2 mb-2 px-1">
-        <span className="text-[11px] font-mono uppercase tracking-wide text-th-text-4">{title}</span>
-        {isActiveColumn && (
-          <span className="text-[9.5px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded bg-th-accent text-white">Active</span>
-        )}
+    <div>
+      <div className="flex items-center gap-2 mb-3">
+        <h3 className="text-[12px] font-semibold text-th-text-2">{title}</h3>
+        {isActiveSection && <span className="text-[9px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded bg-th-accent-bg text-th-accent-text">Active</span>}
       </div>
-      <div className="flex flex-col gap-1">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {themes.map((t) => {
-          const selected = isActiveColumn && t.id === activeId;
+          const selected = isActiveSection && t.id === activeId;
           return (
             <button
               key={t.id}
               onClick={() => onSelect(t.id)}
-              className={`flex items-center justify-between px-3 py-2 rounded-md text-[13px] text-left transition-colors ${
-                selected ? "bg-th-accent-bg text-th-accent-text" : "text-th-text-2 hover:bg-th-hover hover:text-th-text-1"
+              aria-pressed={selected}
+              aria-label={`Use ${t.label} theme`}
+              className={`min-w-0 rounded-lg border p-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
+                selected ? "border-th-accent bg-th-accent-bg" : "border-th-border-input hover:border-th-accent-border hover:bg-th-hover"
               }`}
             >
-              {t.label}
-              {selected && (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              )}
+              <ThemePreview id={t.id} />
+              <div className="flex items-center justify-between gap-1 mt-2 px-0.5">
+                <span className={`min-w-0 truncate text-[11px] font-medium ${selected ? "text-th-accent-text" : "text-th-text-2"}`}>{t.label}</span>
+                {selected && <svg className="shrink-0 text-th-accent-text" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>}
+              </div>
             </button>
           );
         })}
@@ -62,7 +105,7 @@ export function AppearanceSettings() {
   const { appearanceMode, setAppearanceMode, lightThemeId, darkThemeId, isDark, selectTheme } = useTheme();
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <div className="flex items-center gap-2">
         <ModeButton mode="light" current={appearanceMode} onClick={() => setAppearanceMode("light")} title="Light">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -86,10 +129,9 @@ export function AppearanceSettings() {
         </ModeButton>
       </div>
 
-      <div className="flex gap-5 border-t border-th-border pt-4">
-        <ThemeColumn title="Light theme" themes={LIGHT_THEMES} activeId={lightThemeId} isActiveColumn={!isDark} onSelect={selectTheme} />
-        <div className="w-px bg-th-border" />
-        <ThemeColumn title="Dark theme" themes={DARK_THEMES} activeId={darkThemeId} isActiveColumn={isDark} onSelect={selectTheme} />
+      <div className="flex flex-col gap-6 border-t border-th-border pt-4">
+        <ThemeSection title="Light themes" themes={LIGHT_THEMES} activeId={lightThemeId} isActiveSection={!isDark} onSelect={selectTheme} />
+        <ThemeSection title="Dark themes" themes={DARK_THEMES} activeId={darkThemeId} isActiveSection={isDark} onSelect={selectTheme} />
       </div>
     </div>
   );
@@ -98,7 +140,7 @@ export function AppearanceSettings() {
 export default function ThemeModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-th-overlay" onClick={onClose}>
-      <div className="bg-th-surface border border-th-border rounded-lg shadow-2xl w-[560px] max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-th-surface border border-th-border rounded-lg shadow-2xl w-[700px] max-w-[calc(100vw-32px)] max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 pt-5 pb-3">
           <h2 className="text-[15px] font-semibold text-th-text-1">Appearance</h2>
           <button onClick={onClose} className="text-th-text-3 hover:text-th-text-1 text-[18px] w-7 h-7 grid place-items-center rounded hover:bg-th-hover">
