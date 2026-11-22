@@ -22,8 +22,9 @@ const FORMAT_OPTIONS: { key: BodyFormat; label: string; icon: string }[] = [
 function detectFormat(body: string, headers: [string, string][]): BodyFormat {
   // Body sniff wins over Content-Type. Plenty of real APIs mislabel JSON as
   // text/html, and a valid JSON.parse beats trusting a wrong header.
-  if (isJson(body)) return "json";
+  if (body.length <= 200_000 && isJson(body)) return "json";
   const ct = (headers.find(([k]) => k.toLowerCase() === "content-type")?.[1] || "").toLowerCase();
+  if (ct.includes("json")) return "json";
   if (ct.includes("html")) return "html";
   if (ct.includes("xml")) return "xml";
   if (ct.includes("javascript") || ct.includes("ecmascript")) return "javascript";
@@ -47,7 +48,7 @@ function toHexDump(text: string): string {
 // Shared with the Copy button so it always grabs what's on screen, not the
 // raw wire body.
 function getDisplayedText(body: string, format: BodyFormat): string {
-  if (format === "json") return isJson(body) ? JSON.stringify(JSON.parse(body), null, 2) : body;
+  if (format === "json") return body.length <= 200_000 && isJson(body) ? JSON.stringify(JSON.parse(body), null, 2) : body;
   if (format === "hex") return toHexDump(body);
   if (format === "base64") return toBase64(body);
   return body;

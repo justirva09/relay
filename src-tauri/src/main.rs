@@ -1,7 +1,7 @@
 // Prevents an additional console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use relay::{commands, cookie_jar, git, grpc, mock_server, oauth, perf, response_cache, storage, version_check};
+use relay::{commands, cookie_jar, grpc, mock_server, oauth, perf, response_cache, storage, version_check};
 
 fn main() {
     tauri::Builder::default()
@@ -22,15 +22,7 @@ fn main() {
             storage::read_file_at_path,
             storage::write_file_at_path,
             storage::list_proto_files_in_dir,
-            git::git_status,
-            git::git_init,
-            git::git_commit,
-            git::git_history_for_node,
-            git::git_list_branches,
-            git::git_branch_diff,
-            git::git_show_at_ref,
-            git::git_add,
-            git::git_commit_staged,
+            storage::list_bruno_files_in_dir,
             response_cache::load_response_cache,
             response_cache::save_response_cache,
             version_check::check_version_status,

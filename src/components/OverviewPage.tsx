@@ -1,7 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { useWorkspace } from "../store";
 import { TreeNode } from "../types";
-import { gitStatus, GitStatusInfo } from "../lib/tauri";
 import { METHOD_COLOR } from "./Sidebar";
 
 interface WorkspaceStats {
@@ -79,22 +78,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export default function OverviewPage() {
   const { workspace, workspaceDir } = useWorkspace();
-  const [git, setGit] = useState<GitStatusInfo | null | undefined>(undefined);
-
-  useEffect(() => {
-    if (!workspaceDir) {
-      setGit(null);
-      return;
-    }
-    let cancelled = false;
-    gitStatus(workspaceDir)
-      .then((info) => { if (!cancelled) setGit(info); })
-      .catch(() => { if (!cancelled) setGit(null); });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceDir]);
-
   const stats = computeStats(workspace.tree);
   const totalRequests = stats.httpCount + stats.grpcCount;
   const activeEnv = workspace.environments.find((e) => e.id === workspace.activeEnvironmentId);
@@ -172,24 +155,6 @@ export default function OverviewPage() {
             </div>
           </Section>
 
-          <Section title="Git">
-            {git === undefined ? (
-              <p className="text-[12px] text-th-text-4 font-mono">Checking…</p>
-            ) : git === null ? (
-              <p className="text-[12px] text-th-text-4 font-mono">{workspaceDir ? "Not a git repo" : "Workspace not saved to disk yet"}</p>
-            ) : (
-              <div className="flex flex-col gap-1.5 text-[12.5px] font-mono">
-                <div className="flex items-center justify-between">
-                  <span className="text-th-text-3">Branch</span>
-                  <span className="text-th-text-1">{git.branch}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-th-text-3">Uncommitted changes</span>
-                  <span className={git.files.length > 0 ? "text-amber-400" : "text-th-text-1"}>{git.files.length}</span>
-                </div>
-              </div>
-            )}
-          </Section>
         </div>
       </div>
     </div>

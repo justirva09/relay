@@ -447,7 +447,7 @@ function EnvironmentModal({ onClose, initialTab, highlightKey }: { onClose: () =
                 {tab !== "globals" && (
                   <button
                     onClick={() => handleRowChange(r.id, "secret", !r.secret)}
-                    title={r.secret ? "Secret — stored outside git" : "Mark as secret"}
+                    title={r.secret ? "Secret — stored in a separate file" : "Mark as secret"}
                     className={`shrink-0 h-7 w-7 grid place-items-center rounded ${r.secret ? "text-amber-400 hover:bg-amber-400/10" : "text-th-text-4 hover:text-th-text-2 hover:bg-th-hover"}`}
                   >
                     {r.secret ? (

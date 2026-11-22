@@ -92,12 +92,16 @@ export default function TreePickerModal({
   tree,
   title,
   confirmLabel,
+  summary,
+  allowEmpty = false,
   onConfirm,
   onCancel,
 }: {
   tree: TreeNode[];
   title: string;
   confirmLabel: string;
+  summary?: React.ReactNode;
+  allowEmpty?: boolean;
   onConfirm: (selectedIds: Set<string>) => void;
   onCancel: () => void;
 }) {
@@ -144,9 +148,10 @@ export default function TreePickerModal({
             </button>
           </div>
         </div>
+        {summary && <div className="px-4 py-3 border-b border-th-border bg-th-bg shrink-0">{summary}</div>}
         <div className="flex-1 overflow-y-auto py-2">
           {tree.length === 0 ? (
-            <p className="text-[12.5px] text-th-text-3 italic px-4 py-6 text-center">Nothing to show.</p>
+            <p className="text-[12.5px] text-th-text-3 italic px-4 py-6 text-center">{allowEmpty ? "This import contains variables and environments only." : "Nothing to show."}</p>
           ) : (
             tree.map((node) => (
               <Row key={node.id} node={node} depth={0} selected={selected} onToggleLeaf={toggleLeaf} onToggleFolder={toggleFolder} />
@@ -163,7 +168,7 @@ export default function TreePickerModal({
             </button>
             <button
               className="text-[12.5px] px-3 py-1.5 rounded bg-th-accent text-white disabled:opacity-40 disabled:cursor-not-allowed"
-              disabled={selected.size === 0}
+              disabled={selected.size === 0 && !allowEmpty}
               onClick={() => onConfirm(selected)}
             >
               {confirmLabel}

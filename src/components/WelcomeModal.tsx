@@ -48,7 +48,7 @@ export default function WelcomeModal() {
         <div className="text-center mb-7">
           <img src={appIcon} alt="Relay" className="w-14 h-14 rounded-2xl shadow-lg mx-auto mb-3" />
           <h2 className="text-[21px] font-semibold text-th-text-1">Welcome to Relay</h2>
-          <p className="text-[13px] text-th-text-3 mt-1.5">A local-first HTTP &amp; gRPC client with Git built in.</p>
+          <p className="text-[13px] text-th-text-3 mt-1.5">A local-first HTTP &amp; gRPC client.</p>
         </div>
 
         <p className="text-[11px] font-mono uppercase tracking-wide text-th-text-4 mb-2">Get started</p>

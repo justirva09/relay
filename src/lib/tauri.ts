@@ -110,9 +110,14 @@ export async function pickJsonFile(): Promise<string | null> {
 
 export async function pickCollectionFile(): Promise<string | null> {
   const result = await open({
-    filters: [{ name: "Collection / OpenAPI", extensions: ["json", "yaml", "yml"] }],
+    filters: [{ name: "API collection", extensions: ["json", "yaml", "yml"] }],
     multiple: false,
   });
+  return result as string | null;
+}
+
+export async function pickCollectionFolder(): Promise<string | null> {
+  const result = await open({ directory: true, multiple: false });
   return result as string | null;
 }
 
@@ -146,60 +151,8 @@ export function listProtoFilesInDir(dir: string): Promise<{ name: string; conten
   return invoke("list_proto_files_in_dir", { dir });
 }
 
-export interface GitFileChange {
-  path: string;
-  status: string;
-}
-
-export interface GitStatusInfo {
-  branch: string;
-  files: GitFileChange[];
-}
-
-export function gitStatus(dir: string): Promise<GitStatusInfo | null> {
-  return invoke("git_status", { dir });
-}
-
-export function gitInit(dir: string): Promise<void> {
-  return invoke("git_init", { dir });
-}
-
-export interface ApiHistoryEntry {
-  hash: string;
-  author: string;
-  date: string;
-  message: string;
-  content: string | null;
-}
-
-export function gitHistoryForNode(dir: string, nodeId: string): Promise<ApiHistoryEntry[]> {
-  return invoke("git_history_for_node", { dir, nodeId });
-}
-
-export function gitListBranches(dir: string): Promise<string[]> {
-  return invoke("git_list_branches", { dir });
-}
-
-export interface BranchDiffEntry {
-  path: string;
-  status: "added" | "removed" | "modified";
-  before: string | null;
-  after: string | null;
-  // Only populated in working-tree mode (compare: null), splits
-  // committed-vs-base from uncommitted-on-top-of-HEAD.
-  head: string | null;
-}
-
-// compare: null diffs `base` against the working tree instead of another
-// branch. includeHead costs one extra git subprocess per file, so pass
-// false for a bulk listing and fetch on demand with gitShowAtRef instead.
-export function gitBranchDiff(dir: string, base: string, compare: string | null, includeHead: boolean): Promise<BranchDiffEntry[]> {
-  return invoke("git_branch_diff", { dir, base, compare, includeHead });
-}
-
-// Lazy counterpart to includeHead above: only expanded entries pay for it.
-export function gitShowAtRef(dir: string, rev: string, path: string): Promise<string | null> {
-  return invoke("git_show_at_ref", { dir, rev, path });
+export function listBrunoFilesInDir(dir: string): Promise<{ name: string; content: string }[]> {
+  return invoke("list_bruno_files_in_dir", { dir });
 }
 
 export interface PerfStats {
@@ -211,17 +164,6 @@ export interface PerfStats {
 
 export function getPerfStats(): Promise<PerfStats | null> {
   return invoke("get_perf_stats");
-}
-
-// Stages exactly these paths, for partial-field staging after writing a
-// merged file to disk first.
-export function gitAdd(dir: string, paths: string[]): Promise<void> {
-  return invoke("git_add", { dir, paths });
-}
-
-// Commits whatever's staged, no implicit `add -A`.
-export function gitCommitStaged(dir: string, message: string): Promise<void> {
-  return invoke("git_commit_staged", { dir, message });
 }
 
 export interface VersionStatus {

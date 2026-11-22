@@ -1,5 +1,6 @@
 import { Workspace, TreeNode } from "../types";
 import { renderMarkdown } from "./markdown";
+import markdownCss from "../markdown.css?raw";
 import { escapeHtml, highlightJSON, isJsonLike } from "./highlight";
 
 const METHOD_COLOR: Record<string, string> = {
@@ -24,7 +25,11 @@ function kvTable(rows: { key: string; value: string; enabled: boolean }[], empty
   const active = rows.filter((r) => r.enabled && r.key.trim());
   if (active.length === 0) return `<p class="empty">${emptyLabel}</p>`;
   const body = active
-    .map((r) => `<tr><td class="key">${escapeHtml(r.key)}</td><td class="val">${escapeHtml(r.value)}</td></tr>`)
+    .map((r) => {
+      const key = r.key.trim().replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+      const sensitive = /(?:^|[-_])(?:authorization|auth|cookie|token|secret|password|api[-_]?key)(?:$|[-_])/.test(key);
+      return `<tr><td class="key">${escapeHtml(r.key)}</td><td class="val">${escapeHtml(sensitive ? "[redacted]" : r.value)}</td></tr>`;
+    })
     .join("");
   return `<div class="table-wrap"><table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
@@ -80,15 +85,15 @@ function requestSections(nodes: TreeNode[]): string {
             <h2>${escapeHtml(n.name)}</h2>
           </div>
           <p class="url">${escapeHtml(req.url)}</p>
-          ${req.description ? `<div class="markdown-body">${renderMarkdown(req.description)}</div>` : `<p class="empty">No description provided.</p>`}
+          ${req.description ? `<div class="markdown-body">${renderMarkdown(req.description, `req-${n.id}`)}</div>` : `<p class="empty">No description provided.</p>`}
           <h3>Query Params</h3>
           ${kvTable(req.params, "No query params.")}
           ${req.pathParams.length > 0 ? `<h3>Path Variables</h3>${kvTable(req.pathParams, "None.")}` : ""}
           ${
             req.auth.type === "bearer"
-              ? `<h3>Auth</h3><p class="url">Bearer Token: ${escapeHtml(req.auth.bearer?.token || "")}</p>`
+              ? `<h3>Auth</h3><p class="url">Bearer token required</p>`
               : req.auth.type === "basic"
-              ? `<h3>Auth</h3><p class="url">Basic Auth: ${escapeHtml(req.auth.basic?.username || "")} / ${escapeHtml(req.auth.basic?.password || "")}</p>`
+              ? `<h3>Auth</h3><p class="url">Basic authentication required</p>`
               : ""
           }
           <h3>Headers</h3>
@@ -96,7 +101,9 @@ function requestSections(nodes: TreeNode[]): string {
           ${
             req.bodyMode !== "none"
               ? `<h3>Body <span class="empty">(${escapeHtml(req.bodyMode)})</span></h3>${codeBlock(
-                  req.bodyMode === "json" || req.bodyMode === "text" ? req.bodyText : JSON.stringify(req, null, 2)
+                  req.bodyMode === "json" || req.bodyMode === "text"
+                    ? req.bodyText
+                    : JSON.stringify(req.bodyMode === "form-data" ? req.bodyForm : req.bodyUrlencoded, null, 2)
                 )}`
               : ""
           }
@@ -156,11 +163,7 @@ export function generateDocsHtml(workspace: Workspace): string {
   .text-th-syn-string { color: #86efac; }
   .text-th-syn-bool { color: #fbbf24; }
   .text-th-syn-number { color: #7dd3fc; }
-  .markdown-body { font-size: 13.5px; line-height: 1.65; color: #e4e6ec; }
-  .markdown-body p { margin: 0.5em 0; }
-  .markdown-body code { background: #12151e; border: 1px solid #2a2e42; border-radius: 4px; padding: 0.1em 0.4em; font-size: 0.9em; }
-  .markdown-body pre code { border: none; padding: 0; }
-  .markdown-body a { color: #8da0f7; }
+  ${markdownCss}
   footer { font-size: 11px; color: #3e4258; margin-top: 8px; }
 </style>
 </head>
@@ -180,6 +183,17 @@ export function generateDocsHtml(workspace: Workspace): string {
 </main>
 <script>
 (function () {
+  document.querySelectorAll(".markdown-body img").forEach(function (image) {
+    function showFallback() {
+      var fallback = document.createElement("span");
+      fallback.className = "markdown-image-fallback";
+      fallback.textContent = image.alt || "Image unavailable";
+      image.replaceWith(fallback);
+    }
+    if (image.complete && image.naturalWidth === 0) showFallback();
+    else image.addEventListener("error", showFallback, { once: true });
+  });
+
   var navItems = Array.prototype.slice.call(document.querySelectorAll(".nav-item"));
   var sections = navItems
     .map(function (a) { return document.getElementById(a.getAttribute("data-nav")); })

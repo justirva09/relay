@@ -375,9 +375,15 @@ export function buildUrlFromParams(fullUrl: string, rows: KVRow[], encode = true
   const base = qIndex === -1 ? fullUrl : fullUrl.slice(0, qIndex);
   const qs = rows
     .filter((r) => r.enabled && r.key.trim())
-    .map((r) => (encode ? `${encodeURIComponent(r.key)}=${encodeURIComponent(r.value)}` : `${r.key}=${r.value}`))
+    .map((r) => (encode ? `${encodeQueryPartWithVariables(r.key)}=${encodeQueryPartWithVariables(r.value)}` : `${r.key}=${r.value}`))
     .join("&");
   return qs ? `${base}?${qs}` : base;
+}
+
+function encodeQueryPartWithVariables(value: string): string {
+  return value.split(/(\{\{\s*[\w.-]+\s*\}\})/g)
+    .map((part) => /^\{\{\s*[\w.-]+\s*\}\}$/.test(part) ? part : encodeURIComponent(part))
+    .join("");
 }
 
 export function defaultRequest(method: Method = "GET", url = ""): RequestData {

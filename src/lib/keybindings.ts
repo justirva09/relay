@@ -25,7 +25,6 @@ export const KEYBINDING_DEFS: KeybindingDef[] = [
   { id: "sidebar.duplicate", label: "Duplicate Item", category: "Sidebar", defaultCombo: "mod+d" },
 
   { id: "view.settings", label: "Open Settings", category: "View", defaultCombo: "mod+," },
-  { id: "view.compareBranches", label: "Compare Branches", category: "View", defaultCombo: "mod+shift+b" },
   { id: "view.runner", label: "Open Runner", category: "View", defaultCombo: "mod+r" },
 ];
 

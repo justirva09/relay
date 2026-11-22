@@ -9,9 +9,7 @@ import ResizableCodeEditor from "./ResizableCodeEditor";
 import CodeSnippetModal from "./CodeSnippetModal";
 import { PM_PRE_COMPLETIONS, PM_TEST_COMPLETIONS } from "../lib/pmCompletions";
 import { useWorkspace } from "../store";
-import { VariableGroup } from "../lib/useVariableMenu";
 import SimpleSelect from "./SimpleSelect";
-import ApiHistoryPanel from "./ApiHistoryPanel";
 import ContractCheckModal from "./ContractCheckModal";
 import { renderMarkdown } from "../lib/markdown";
 import { buildVariableInfo } from "../lib/useVariableHover";
@@ -25,6 +23,7 @@ import AutoHeadersList from "./requestPanel/AutoHeadersList";
 import ExamplesTab from "./requestPanel/ExamplesTab";
 import { METHOD_COLOR } from "./requestPanel/shared";
 import { COMMON_HTTP_HEADERS } from "../lib/httpHeaders";
+import { activeVariableGroups } from "../lib/variableResolution";
 
 const PRE_PLACEHOLDER = `// runs before the request is sent
 // pm.environment.set("token", "abc123")
@@ -47,7 +46,7 @@ interface Props {
 }
 
 export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, onSend, onSave }: Props) {
-  const [reqTab, setReqTab] = useState<"docs" | "params" | "auth" | "headers" | "body" | "examples" | "scripts" | "settings" | "history">("params");
+  const [reqTab, setReqTab] = useState<"docs" | "params" | "auth" | "headers" | "body" | "examples" | "scripts" | "settings">("params");
   const [docsMode, setDocsMode] = useState<"edit" | "preview">("edit");
   const [scriptTab, setScriptTab] = useState<"pre" | "post">("pre");
   const [showSnippet, setShowSnippet] = useState(false);
@@ -62,16 +61,7 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
   const [showContractCheck, setShowContractCheck] = useState(false);
   // grouped by scope so the {{variable}} completion menu can show where
   // each suggestion comes from (Global, or a specific environment)
-  const variableGroups = useMemo(() => {
-    const groups: VariableGroup[] = [];
-    const globalNames = workspace.variables.filter((v) => v.key.trim()).map((v) => v.key);
-    if (globalNames.length) groups.push({ category: "Global", names: globalNames });
-    for (const env of workspace.environments) {
-      const names = env.variables.filter((v) => v.key.trim()).map((v) => v.key);
-      if (names.length) groups.push({ category: env.name, names });
-    }
-    return groups;
-  }, [workspace.variables, workspace.environments]);
+  const variableGroups = useMemo(() => activeVariableGroups(workspace), [workspace]);
 
   const variables = useMemo(() => mergedVariables(workspace), [workspace]);
   const variableInfo = useMemo(() => buildVariableInfo(workspace), [workspace]);
@@ -102,7 +92,7 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
       : false;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-w-0 overflow-hidden">
       <div className="px-4 pt-4 flex items-center gap-2">
         <MethodDropdown value={draft.method} onChange={(m) => onChange({ method: m })} />
         <UrlInput
@@ -152,7 +142,6 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
             ["examples", `Examples${draft.examples.length ? ` (${draft.examples.length})` : ""}`],
             ["scripts", "Scripts"],
             ["settings", "Settings"],
-            ["history", "History"],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -185,9 +174,9 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
         </div>
       </div>
 
-      <div className="px-4 py-3 flex-1 min-h-0 flex flex-col">
+      <div className={`px-4 py-3 flex-1 min-h-0 min-w-0 flex flex-col ${reqTab === "docs" ? "overflow-hidden" : "overflow-y-auto overflow-x-hidden"}`}>
         {reqTab === "docs" && (
-          <div className="flex flex-col flex-1 min-h-0 gap-1.5">
+          <div className="flex flex-col flex-1 min-h-0 min-w-0 gap-1.5">
             <div className="flex items-center gap-1 shrink-0">
               {(["edit", "preview"] as const).map((m) => (
                 <button
@@ -209,9 +198,20 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
                 className="flex-1 min-h-0 resize-none bg-th-surface border border-th-border-input rounded-md px-3 py-2.5 text-[13px] font-sans leading-relaxed text-th-text-1 placeholder:text-th-text-4 focus:outline-none focus:border-th-border-focus"
               />
             ) : (
-              <div className="flex-1 min-h-0 overflow-y-auto bg-th-surface border border-th-border-input rounded-md px-4 py-3">
+              <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden bg-th-surface border border-th-border-input rounded-md px-4 py-3">
                 {draft.description.trim() ? (
-                  <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(draft.description) }} />
+                  <div
+                    className="markdown-body"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(draft.description) }}
+                    onErrorCapture={(event) => {
+                      const image = event.target;
+                      if (!(image instanceof HTMLImageElement)) return;
+                      const fallback = document.createElement("span");
+                      fallback.className = "markdown-image-fallback";
+                      fallback.textContent = image.alt || "Image unavailable";
+                      image.replaceWith(fallback);
+                    }}
+                  />
                 ) : (
                   <span className="text-[13px] text-th-text-4">Nothing here yet — switch to Edit to write a description.</span>
                 )}
@@ -686,7 +686,6 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
             </div>
           </div>
         )}
-        {reqTab === "history" && <ApiHistoryPanel nodeId={nodeId} />}
       </div>
 
       {showSnippet && <CodeSnippetModal draft={draft} onClose={() => setShowSnippet(false)} />}
