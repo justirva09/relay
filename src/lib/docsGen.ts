@@ -2,6 +2,21 @@ import { Workspace, TreeNode } from "../types";
 import { renderMarkdown } from "./markdown";
 import markdownCss from "../markdown.css?raw";
 import { escapeHtml, highlightJSON, isJsonLike } from "./highlight";
+import { LIGHT_THEMES } from "./theme";
+
+const DOC_THEME_VARS = [
+  "--c-bg", "--c-sidebar", "--c-surface", "--c-input", "--c-hover",
+  "--c-border", "--c-border-input", "--c-accent", "--c-accent-bg", "--c-accent-text",
+  "--c-text-1", "--c-text-2", "--c-text-3", "--c-text-4",
+  "--c-syn-key", "--c-syn-string", "--c-syn-number", "--c-syn-bool", "--c-syn-null",
+] as const;
+
+function docsThemeCss(): string {
+  if (typeof document === "undefined") return "color-scheme: dark;";
+  const style = getComputedStyle(document.documentElement);
+  const isLight = LIGHT_THEMES.some((theme) => theme.id === document.documentElement.dataset.theme);
+  return `color-scheme: ${isLight ? "light" : "dark"}; ${DOC_THEME_VARS.map((name) => `${name}: ${style.getPropertyValue(name).trim()};`).join(" ")}`;
+}
 
 const METHOD_COLOR: Record<string, string> = {
   GET: "#34d399",
@@ -121,50 +136,52 @@ export function generateDocsHtml(workspace: Workspace): string {
 <meta charset="utf-8" />
 <title>${escapeHtml(workspace.name || "API Documentation")}</title>
 <style>
-  :root { color-scheme: dark; }
+  :root { ${docsThemeCss()} }
   * { box-sizing: border-box; }
-  body { margin: 0; display: flex; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f1117; color: #e4e6ec; }
-  nav { width: 268px; flex-shrink: 0; height: 100vh; overflow-y: auto; border-right: 1px solid #222638; padding: 20px 0 24px; position: sticky; top: 0; }
+  body { margin: 0; display: flex; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--c-bg, #0f1117); color: var(--c-text-1, #e4e6ec); }
+  nav { width: 268px; flex-shrink: 0; height: 100vh; overflow-y: auto; border-right: 1px solid var(--c-border, #222638); padding: 20px 0 24px; position: sticky; top: 0; }
   nav h1 { font-size: 14px; font-weight: 600; padding: 0 16px 4px; margin: 0; }
-  nav .nav-meta { font-size: 11.5px; color: #5e6278; padding: 0 16px 16px; border-bottom: 1px solid #1b1e2b; margin-bottom: 8px; }
-  .nav-folder { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #5e6278; font-weight: 600; padding: 16px 16px 6px; }
-  .nav-item { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 13px; color: #8b8fa3; text-decoration: none; border-radius: 6px; margin: 0 8px; width: calc(100% - 16px); }
+  nav .nav-meta { font-size: 11.5px; color: var(--c-text-3, #5e6278); padding: 0 16px 16px; border-bottom: 1px solid var(--c-border, #222638); margin-bottom: 8px; }
+  .nav-folder { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--c-text-3, #5e6278); font-weight: 600; padding: 16px 16px 6px; }
+  .nav-item { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 13px; color: var(--c-text-2, #8b8fa3); text-decoration: none; border-radius: 6px; margin: 0 8px; width: calc(100% - 16px); }
   .nav-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .nav-item:hover { color: #e4e6ec; background: rgba(255,255,255,0.05); }
-  .nav-item.active { color: #e4e6ec; background: rgba(141,160,247,0.14); }
+  .nav-item:hover { color: var(--c-text-1, #e4e6ec); background: var(--c-hover, rgba(255,255,255,0.05)); }
+  .nav-item.active { color: var(--c-accent-text, #8da0f7); background: var(--c-accent-bg, rgba(141,160,247,0.14)); }
   main { flex: 1; min-width: 0; padding: 40px 56px 80px; max-width: 820px; }
-  .doc-header { margin-bottom: 36px; padding-bottom: 24px; border-bottom: 1px solid #222638; }
+  .doc-header { margin-bottom: 36px; padding-bottom: 24px; border-bottom: 1px solid var(--c-border, #222638); }
   .doc-header h1 { font-size: 24px; margin: 0 0 6px; }
-  .doc-header .meta { font-size: 12.5px; color: #5e6278; }
-  .request { border-bottom: 1px solid #222638; padding-bottom: 32px; margin-bottom: 32px; scroll-margin-top: 24px; }
+  .doc-header .meta { font-size: 12.5px; color: var(--c-text-3, #5e6278); }
+  .request { border-bottom: 1px solid var(--c-border, #222638); padding-bottom: 32px; margin-bottom: 32px; scroll-margin-top: 24px; }
   .request:last-child { border-bottom: none; }
   .request-head { display: flex; align-items: center; gap: 10px; }
   .request-head h2 { font-size: 19px; margin: 0; font-weight: 600; }
   .badge { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; border: 1px solid currentColor; border-radius: 5px; padding: 2px 7px; white-space: nowrap; }
-  .url { font-family: ui-monospace, monospace; font-size: 12.5px; color: #8b8fa3; margin: 8px 0 16px; word-break: break-all; }
-  h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #5e6278; font-weight: 600; margin: 20px 0 8px; }
-  .empty { font-size: 12.5px; color: #5e6278; font-style: italic; margin: 0; }
-  .table-wrap { border: 1px solid #222638; border-radius: 8px; overflow: hidden; }
+  .url { font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--c-text-2, #8b8fa3); margin: 8px 0 16px; word-break: break-all; }
+  h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--c-text-3, #5e6278); font-weight: 600; margin: 20px 0 8px; }
+  .empty { font-size: 12.5px; color: var(--c-text-3, #5e6278); font-style: italic; margin: 0; }
+  .table-wrap { border: 1px solid var(--c-border, #222638); border-radius: 8px; overflow: hidden; }
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th, td { padding: 7px 12px; text-align: left; border-bottom: 1px solid #1b1e2b; }
+  th, td { padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--c-border, #222638); }
   tr:last-child td { border-bottom: none; }
-  th { color: #8b8fa3; font-weight: 600; background: #161922; }
-  tbody tr:nth-child(even) { background: rgba(255,255,255,0.015); }
-  td.key { font-family: ui-monospace, monospace; color: #c4b5fd; }
+  th { color: var(--c-text-2, #8b8fa3); font-weight: 600; background: var(--c-surface, #161922); }
+  tbody tr:nth-child(even) { background: var(--c-surface, #161922); }
+  td.key { font-family: ui-monospace, monospace; color: var(--c-syn-key, #c4b5fd); }
   td.val { font-family: ui-monospace, monospace; }
   .code-block { position: relative; }
-  .code-block pre { background: #12151e; border: 1px solid #2a2e42; border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: 12.5px; margin: 0; }
+  .code-block pre { background: var(--c-input, #12151e); border: 1px solid var(--c-border-input, #2a2e42); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: 12.5px; margin: 0; }
   .code-block code { font-family: ui-monospace, monospace; line-height: 1.6; }
-  .copy-btn { position: absolute; top: 8px; right: 8px; font-size: 11px; color: #8b8fa3; background: #1b1e2b; border: 1px solid #2a2e42; border-radius: 5px; padding: 3px 8px; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
+  .copy-btn { position: absolute; top: 8px; right: 8px; font-size: 11px; color: var(--c-text-2, #8b8fa3); background: var(--c-surface, #161922); border: 1px solid var(--c-border-input, #2a2e42); border-radius: 5px; padding: 3px 8px; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
   .code-block:hover .copy-btn { opacity: 1; }
-  .copy-btn:hover { color: #e4e6ec; border-color: #3e4258; }
-  .copy-btn.copied { color: #34d399; opacity: 1; }
-  .text-th-syn-key { color: #c4b5fd; }
-  .text-th-syn-string { color: #86efac; }
-  .text-th-syn-bool { color: #fbbf24; }
-  .text-th-syn-number { color: #7dd3fc; }
+  .copy-btn:hover { color: var(--c-text-1, #e4e6ec); border-color: var(--c-text-4, #3e4258); }
+  .copy-btn.copied { color: var(--c-syn-string, #34d399); opacity: 1; }
+  .text-th-syn-key { color: var(--c-syn-key, #c4b5fd); }
+  .text-th-syn-string { color: var(--c-syn-string, #86efac); }
+  .text-th-syn-bool { color: var(--c-syn-bool, #7dd3fc); }
+  .text-th-syn-null { color: var(--c-syn-null, #fca5a5); }
+  .text-th-syn-number { color: var(--c-syn-number, #fbbf24); }
+  .text-th-accent-text { color: var(--c-accent-text, #8da0f7); }
   ${markdownCss}
-  footer { font-size: 11px; color: #3e4258; margin-top: 8px; }
+  footer { font-size: 11px; color: var(--c-text-4, #3e4258); margin-top: 8px; }
 </style>
 </head>
 <body>

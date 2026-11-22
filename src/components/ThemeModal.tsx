@@ -1,5 +1,5 @@
 import React from "react";
-import { useTheme, LIGHT_THEMES, DARK_THEMES, ThemeId, AppearanceMode } from "../lib/theme";
+import { useTheme, LIGHT_THEMES, DARK_THEMES, SYNTAX_PALETTES, ThemeId, AppearanceMode, SyntaxPalette } from "../lib/theme";
 
 function ModeButton({ mode, current, onClick, children, title }: { mode: AppearanceMode; current: AppearanceMode; onClick: () => void; children: React.ReactNode; title: string }) {
   const active = mode === current;
@@ -16,10 +16,11 @@ function ModeButton({ mode, current, onClick, children, title }: { mode: Appeara
   );
 }
 
-function ThemePreview({ id }: { id: ThemeId }) {
+function ThemePreview({ id, syntaxPalette }: { id: ThemeId; syntaxPalette: SyntaxPalette }) {
   return (
     <div
       data-theme={id}
+      data-syntax-palette={syntaxPalette}
       aria-hidden="true"
       className="h-[96px] overflow-hidden rounded-md border text-left"
       style={{ background: "var(--c-bg)", borderColor: "var(--c-border)", color: "var(--c-text-1)" }}
@@ -49,10 +50,10 @@ function ThemePreview({ id }: { id: ThemeId }) {
             <div className="h-2 flex-1 rounded-sm border" style={{ background: "var(--c-input)", borderColor: "var(--c-border-input)" }} />
             <div className="h-2 w-5 rounded-sm" style={{ background: "var(--c-accent)" }} />
           </div>
-          <div className="mt-1.5 rounded-sm border px-1.5 py-1 space-y-1" style={{ background: "var(--c-surface)", borderColor: "var(--c-border)" }}>
-            <div className="h-1 w-2/3 rounded-full" style={{ background: "var(--c-text-2)" }} />
-            <div className="flex gap-1"><div className="h-1 w-1/4 rounded-full" style={{ background: "var(--c-syn-key)" }} /><div className="h-1 w-1/2 rounded-full" style={{ background: "var(--c-syn-string)" }} /></div>
-            <div className="flex gap-1"><div className="h-1 w-1/3 rounded-full" style={{ background: "var(--c-syn-bool)" }} /><div className="h-1 w-1/4 rounded-full" style={{ background: "var(--c-syn-number)" }} /></div>
+          <div className="mt-1.5 rounded-sm border px-1.5 py-1 font-mono text-[7px] leading-[1.35]" style={{ background: "var(--c-input)", borderColor: "var(--c-border-input)" }}>
+            <div><span style={{ color: "var(--c-syn-key)" }}>"name"</span>: <span style={{ color: "var(--c-syn-string)" }}>"Relay"</span>,</div>
+            <div><span style={{ color: "var(--c-syn-key)" }}>"port"</span>: <span style={{ color: "var(--c-syn-number)" }}>8080</span>,</div>
+            <div><span style={{ color: "var(--c-syn-key)" }}>"ready"</span>: <span style={{ color: "var(--c-syn-bool)" }}>true</span>, <span style={{ color: "var(--c-syn-key)" }}>"error"</span>: <span style={{ color: "var(--c-syn-null)" }}>null</span></div>
           </div>
         </div>
       </div>
@@ -60,10 +61,11 @@ function ThemePreview({ id }: { id: ThemeId }) {
   );
 }
 
-function ThemeSection({ title, themes, activeId, isActiveSection, onSelect }: {
+function ThemeSection({ title, themes, activeId, syntaxPalette, isActiveSection, onSelect }: {
   title: string;
   themes: { id: ThemeId; label: string }[];
   activeId: ThemeId;
+  syntaxPalette: SyntaxPalette;
   isActiveSection: boolean;
   onSelect: (id: ThemeId) => void;
 }) {
@@ -86,7 +88,7 @@ function ThemeSection({ title, themes, activeId, isActiveSection, onSelect }: {
                 selected ? "border-th-accent bg-th-accent-bg" : "border-th-border-input hover:border-th-accent-border hover:bg-th-hover"
               }`}
             >
-              <ThemePreview id={t.id} />
+              <ThemePreview id={t.id} syntaxPalette={syntaxPalette} />
               <div className="flex items-center justify-between gap-1 mt-2 px-0.5">
                 <span className={`min-w-0 truncate text-[11px] font-medium ${selected ? "text-th-accent-text" : "text-th-text-2"}`}>{t.label}</span>
                 {selected && <svg className="shrink-0 text-th-accent-text" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>}
@@ -102,7 +104,7 @@ function ThemeSection({ title, themes, activeId, isActiveSection, onSelect }: {
 // The picker UI itself, no modal chrome. Reused by the standalone
 // ThemeModal and Settings' Appearance section so there's one copy.
 export function AppearanceSettings() {
-  const { appearanceMode, setAppearanceMode, lightThemeId, darkThemeId, isDark, selectTheme } = useTheme();
+  const { appearanceMode, setAppearanceMode, lightThemeId, darkThemeId, activeThemeId, syntaxPalette, setSyntaxPalette, isDark, selectTheme } = useTheme();
 
   return (
     <div className="flex flex-col gap-5">
@@ -130,8 +132,26 @@ export function AppearanceSettings() {
       </div>
 
       <div className="flex flex-col gap-6 border-t border-th-border pt-4">
-        <ThemeSection title="Light themes" themes={LIGHT_THEMES} activeId={lightThemeId} isActiveSection={!isDark} onSelect={selectTheme} />
-        <ThemeSection title="Dark themes" themes={DARK_THEMES} activeId={darkThemeId} isActiveSection={isDark} onSelect={selectTheme} />
+        <ThemeSection title="Light themes" themes={LIGHT_THEMES} activeId={lightThemeId} syntaxPalette={syntaxPalette} isActiveSection={!isDark} onSelect={selectTheme} />
+        <ThemeSection title="Dark themes" themes={DARK_THEMES} activeId={darkThemeId} syntaxPalette={syntaxPalette} isActiveSection={isDark} onSelect={selectTheme} />
+        <div className="border-t border-th-border pt-4">
+          <h3 className="mb-1 text-[12px] font-semibold text-th-text-2">Syntax colors</h3>
+          <p className="mb-3 text-[11px] text-th-text-3">Choose code colors independently from the app theme.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {SYNTAX_PALETTES.map((palette) => (
+              <button key={palette.id} type="button" aria-pressed={syntaxPalette === palette.id} onClick={() => setSyntaxPalette(palette.id)}
+                className={`min-w-0 rounded-lg border p-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${syntaxPalette === palette.id ? "border-th-accent bg-th-accent-bg" : "border-th-border-input hover:border-th-accent-border"}`}>
+                <div data-theme={activeThemeId} data-syntax-palette={palette.id} className="rounded border p-2 font-mono text-[10px] leading-4"
+                  style={{ background: "var(--c-input)", borderColor: "var(--c-border-input)", color: "var(--c-text-1)" }}>
+                  <div><span style={{ color: "var(--c-syn-key)" }}>"name"</span>: <span style={{ color: "var(--c-syn-string)" }}>"Relay"</span></div>
+                  <div><span style={{ color: "var(--c-syn-key)" }}>"count"</span>: <span style={{ color: "var(--c-syn-number)" }}>42</span></div>
+                  <div><span style={{ color: "var(--c-syn-bool)" }}>true</span> · <span style={{ color: "var(--c-syn-null)" }}>null</span></div>
+                </div>
+                <span className="mt-1.5 block truncate text-[11px] text-th-text-2">{palette.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

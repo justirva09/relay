@@ -480,6 +480,50 @@ mark.search-hl.search-hl-current {
   --c-syn-null: #ef9a9a;
 }
 
+/* Syntax palettes can be combined with any appearance theme. */
+[data-syntax-palette="vivid"] {
+  --c-syn-key: #ff79c6;
+  --c-syn-string: #50fa9b;
+  --c-syn-number: #bd93f9;
+  --c-syn-bool: #8be9fd;
+  --c-syn-null: #ffb86c;
+}
+[data-syntax-palette="warm"] {
+  --c-syn-key: #ffd166;
+  --c-syn-string: #ff9e80;
+  --c-syn-number: #f6c177;
+  --c-syn-bool: #c9a7ff;
+  --c-syn-null: #ff7373;
+}
+[data-syntax-palette="ocean"] {
+  --c-syn-key: #8be9fd;
+  --c-syn-string: #7dd3c7;
+  --c-syn-number: #ffd27a;
+  --c-syn-bool: #a7b9ff;
+  --c-syn-null: #ff9caf;
+}
+[data-syntax-palette="vivid"]:is([data-theme="light"], [data-theme="light-monochrome"], [data-theme="light-pastel"], [data-theme="catppuccin-latte"], [data-theme="vscode-light"], [data-theme="material-light"]) {
+  --c-syn-key: #ad1457;
+  --c-syn-string: #087f5b;
+  --c-syn-number: #6f42c1;
+  --c-syn-bool: #0069a6;
+  --c-syn-null: #b45309;
+}
+[data-syntax-palette="warm"]:is([data-theme="light"], [data-theme="light-monochrome"], [data-theme="light-pastel"], [data-theme="catppuccin-latte"], [data-theme="vscode-light"], [data-theme="material-light"]) {
+  --c-syn-key: #8b4513;
+  --c-syn-string: #b44b3f;
+  --c-syn-number: #946200;
+  --c-syn-bool: #7652a8;
+  --c-syn-null: #b42318;
+}
+[data-syntax-palette="ocean"]:is([data-theme="light"], [data-theme="light-monochrome"], [data-theme="light-pastel"], [data-theme="catppuccin-latte"], [data-theme="vscode-light"], [data-theme="material-light"]) {
+  --c-syn-key: #096b84;
+  --c-syn-string: #087f75;
+  --c-syn-number: #986b0a;
+  --c-syn-bool: #4355a9;
+  --c-syn-null: #b63b65;
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;
