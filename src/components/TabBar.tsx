@@ -12,7 +12,7 @@ const METHOD_COLOR: Record<string, string> = {
 };
 
 export default function TabBar() {
-  const { tabs, activeTabId, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, deleteNode, workspace, renameNode } = useWorkspace();
+  const { tabs, activeTabId, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, deleteNode, workspace, renameNode, openTabInNewWindow } = useWorkspace();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editVal, setEditVal] = useState("");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -125,6 +125,13 @@ export default function TabBar() {
           className="fixed z-50 bg-th-elevated border border-th-border rounded-md shadow-xl py-1 min-w-[160px]"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
         >
+          <button
+            onClick={() => { openTabInNewWindow(ctxMenu.tabId); setCtxMenu(null); }}
+            className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"
+          >
+            Open in New Window
+          </button>
+          <div className="my-1 border-t border-th-border" />
           <button
             onClick={() => { closeTab(ctxMenu.tabId); setCtxMenu(null); }}
             className="w-full px-3 py-1.5 text-left text-[12.5px] text-th-text-1 hover:bg-th-hover"

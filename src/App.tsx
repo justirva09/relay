@@ -312,6 +312,7 @@ function WorkspaceFolderBanner() {
 }
 
 function Main() {
+  const isPopout = new URLSearchParams(window.location.search).has("popout");
   const { workspace, tabs, activeTabId, openTick, updateDraft, saveTab, sendTab, updateGrpcDraft, sendGrpcTab, cancelGrpcTab, setProtoLibrary, runnerOpen, openRunner, closeRunner, closeTab, closeAllTabs, setActiveTab } = useWorkspace();
   const activeTab = tabs.find((t) => t.nodeId === activeTabId) || null;
   const { responseLayout } = useLayout();
@@ -564,15 +565,15 @@ function Main() {
   return (
     <div className="flex flex-col h-screen w-screen bg-th-bg text-th-text-1 font-sans overflow-hidden">
     <div className="flex-1 flex min-h-0">
-      <Sidebar />
+      {!isPopout && <Sidebar />}
       <div className="flex-1 flex flex-col min-w-0">
-        <WorkspaceFolderBanner />
-        <EnvironmentBar onShowOverview={() => setShowOverview(true)} />
-        <TabBar />
+        {!isPopout && <WorkspaceFolderBanner />}
+        {!isPopout && <EnvironmentBar onShowOverview={() => setShowOverview(true)} />}
+        {!isPopout && <TabBar />}
         {runnerOpen ? (
           <RunnerPanel onClose={closeRunner} />
         ) : !activeTab || showOverview ? (
-          <OverviewPage />
+          isPopout ? <div className="flex-1 grid place-items-center text-th-text-3 text-sm">Opening request…</div> : <OverviewPage />
         ) : (
           <div ref={containerRef} className={`flex-1 flex min-h-0 ${responseLayout === "bottom" ? "flex-col" : ""}`}>
             {responseLayout === "side" ? (
@@ -606,11 +607,11 @@ function Main() {
         )}
       </div>
       <UnsavedModal />
-      <WorkspaceSetupModal />
-      <ImportExportModals />
-      <WelcomeModal />
+      {!isPopout && <WorkspaceSetupModal />}
+      {!isPopout && <ImportExportModals />}
+      {!isPopout && <WelcomeModal />}
     </div>
-    <Footer />
+    {!isPopout && <Footer />}
     </div>
   );
 }
