@@ -11,9 +11,24 @@ import { useSafeMode } from "./store/useSafeMode";
 import { useResponseCache } from "./store/useResponseCache";
 import { useEnvironments } from "./store/useEnvironments";
 import { GrpcApiImportService, useTreeActions } from "./store/useTreeActions";
-import { activeVariableRows, resolveWorkspaceAddress } from "./lib/variableResolution";
-import { substituteVars } from "./lib/pm";
+import { activeVariableRows } from "./lib/variableResolution";
+import { prepareGrpcExecution, finishGrpcExecution } from "./lib/grpcExecution";
 import { ImportPayload, ImportStats, useImportExport } from "./store/useImportExport";
+import { emitTo, listen } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
+const popoutLabel = new URLSearchParams(window.location.search).get("popout");
+const isPopout = !!popoutLabel;
+const POPOUT_READY = "relay:popout-ready";
+const POPOUT_INIT = "relay:popout-init";
+const POPOUT_WORKSPACE = "relay:popout-workspace";
+const POPOUT_SAVE = "relay:popout-save";
+const POPOUT_VARIABLES = "relay:popout-variables";
+const POPOUT_PROTO = "relay:popout-proto";
+
+type PopoutInit = { workspace: Workspace; workspaceDir: string | null; hidden: boolean; tab: TabState };
+type PopoutSave = { nodeId: string; kind: TabState["kind"]; draft: RequestData | GrpcRequestData };
 
 interface Ctx {
   workspace: Workspace;
@@ -66,6 +81,7 @@ interface Ctx {
   toggleCollapse: (id: string) => void;
   collapseAllFolders: () => void;
   openTab: (id: string) => void;
+  openTabInNewWindow: (id: string) => Promise<void>;
   closeTab: (id: string) => void;
   closeOtherTabs: (id: string) => void;
   closeAllTabs: () => void;
@@ -157,15 +173,35 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveArgsRef = useRef<{ dir: string; data: string; hidden: boolean } | null>(null);
   const grpcCancelRefs = useRef<Map<string, { current: boolean; requestId?: string }>>(new Map());
+  const popoutTargetsRef = useRef(new Map<string, string>());
+  const allowPopoutCloseRef = useRef(false);
+  const workspaceRef = useRef(workspace);
+  const tabsRef = useRef(tabs);
+  const workspaceDirRef = useRef(workspaceDir);
+  const workspaceHiddenRef = useRef(workspaceHidden);
+  workspaceRef.current = workspace;
+  tabsRef.current = tabs;
+  workspaceDirRef.current = workspaceDir;
+  workspaceHiddenRef.current = workspaceHidden;
 
   const { cookies, setCookies } = useCookieJar(workspaceDir);
   const { mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer } = useMockServer(workspaceDir);
   const { safeMode, setSafeMode } = useSafeMode(workspaceDir);
   const { responseCacheEnabled, setResponseCacheEnabled, responseCacheRef, persistResponseCache } = useResponseCache(workspaceDir);
-  const { setVariables, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, applyVariableChanges } =
+  const { setVariables, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, applyVariableChanges: applyVariableChangesLocal } =
     useEnvironments(workspace, setWorkspace);
-  const { addFolder, addRequest, addGrpcRequest, importGrpcApi, renameNode, duplicateNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, moveNodes, setProtoLibrary } =
+  const { addFolder, addRequest, addGrpcRequest, importGrpcApi, renameNode, duplicateNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, moveNodes, setProtoLibrary: setProtoLibraryLocal } =
     useTreeActions(workspace, setWorkspace, setTabs, setActiveTabId);
+  const applyVariableChangesLocalRef = useRef(applyVariableChangesLocal);
+  applyVariableChangesLocalRef.current = applyVariableChangesLocal;
+  const applyVariableChanges = useCallback((changed: Record<string, string>) => {
+    applyVariableChangesLocal(changed);
+    if (isPopout) emitTo("main", POPOUT_VARIABLES, changed).catch(() => {});
+  }, [applyVariableChangesLocal]);
+  const setProtoLibrary = useCallback((files: { name: string; content: string }[]) => {
+    setProtoLibraryLocal(files);
+    if (isPopout) emitTo("main", POPOUT_PROTO, files).catch(() => {});
+  }, [setProtoLibraryLocal]);
   const {
     importCollection,
     importVariables,
@@ -185,6 +221,27 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   } = useImportExport(workspace, setWorkspace);
 
   useEffect(() => {
+    if (isPopout) {
+      let disposed = false;
+      let unlistenInit: (() => void) | undefined;
+      let unlistenWorkspace: (() => void) | undefined;
+      (async () => {
+        unlistenInit = await listen<PopoutInit>(POPOUT_INIT, ({ payload }) => {
+          if (disposed) return;
+          setWorkspace(payload.workspace);
+          setWorkspaceDir(payload.workspaceDir);
+          setWorkspaceHidden(payload.hidden);
+          setTabs([payload.tab]);
+          setActiveTabId(payload.tab.nodeId);
+          loaded.current = true;
+        });
+        unlistenWorkspace = await listen<Workspace>(POPOUT_WORKSPACE, ({ payload }) => {
+          if (!disposed) setWorkspace(payload);
+        });
+        if (!disposed) await emitTo("main", POPOUT_READY, { label: popoutLabel });
+      })();
+      return () => { disposed = true; unlistenInit?.(); unlistenWorkspace?.(); };
+    }
     (async () => {
       try {
         const dir = await getLastWorkspaceDir();
@@ -208,12 +265,89 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
+  useEffect(() => {
+    if (!isPopout) return;
+    let disposed = false;
+    let unlistenClose: (() => void) | undefined;
+    getCurrentWindow().onCloseRequested((event) => {
+      if (allowPopoutCloseRef.current) return;
+      const tab = tabsRef.current[0];
+      if (tab?.dirty) {
+        event.preventDefault();
+        setPendingCloseId(tab.nodeId);
+      }
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlistenClose = unlisten;
+    });
+    return () => { disposed = true; unlistenClose?.(); };
+  }, []);
+
+  useEffect(() => {
+    if (isPopout) return;
+    let disposed = false;
+    let unlistenReady: (() => void) | undefined;
+    let unlistenSave: (() => void) | undefined;
+    let unlistenVariables: (() => void) | undefined;
+    let unlistenProto: (() => void) | undefined;
+    (async () => {
+      unlistenReady = await listen<{ label: string }>(POPOUT_READY, async ({ payload }) => {
+        const nodeId = popoutTargetsRef.current.get(payload.label);
+        const tab = tabsRef.current.find((item) => item.nodeId === nodeId);
+        if (!nodeId || !tab || disposed) return;
+        await emitTo(payload.label, POPOUT_INIT, {
+          workspace: workspaceRef.current, workspaceDir: workspaceDirRef.current,
+          hidden: workspaceHiddenRef.current, tab,
+        } satisfies PopoutInit);
+        setTabs((current) => current.filter((item) => item.nodeId !== nodeId));
+        setActiveTabId((current) => current === nodeId ? null : current);
+      });
+      unlistenSave = await listen<PopoutSave>(POPOUT_SAVE, ({ payload }) => {
+        setWorkspace((current) => ({
+          ...current,
+          tree: mapTree(current.tree, payload.nodeId, (node) => {
+            if (node.kind === "request" && payload.kind === "http") return { ...node, request: payload.draft as RequestData };
+            if (node.kind === "grpc" && payload.kind === "grpc") return { ...node, request: payload.draft as GrpcRequestData };
+            return node;
+          }),
+        }));
+      });
+      unlistenVariables = await listen<Record<string, string>>(POPOUT_VARIABLES, ({ payload }) => applyVariableChangesLocalRef.current(payload));
+      unlistenProto = await listen<{ name: string; content: string }[]>(POPOUT_PROTO, ({ payload }) => setProtoLibraryLocal(payload));
+    })();
+    return () => { disposed = true; unlistenReady?.(); unlistenSave?.(); unlistenVariables?.(); unlistenProto?.(); };
+  }, []);
+
+  useEffect(() => {
+    if (isPopout) return;
+    let disposed = false;
+    let unlistenClose: (() => void) | undefined;
+    getCurrentWindow().onCloseRequested(async (event) => {
+      const firstLabel = popoutTargetsRef.current.keys().next().value;
+      if (!firstLabel) return;
+      event.preventDefault();
+      const child = await WebviewWindow.getByLabel(firstLabel);
+      await child?.setFocus();
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlistenClose = unlisten;
+    });
+    return () => { disposed = true; unlistenClose?.(); };
+  }, []);
+
+  useEffect(() => {
+    if (isPopout || !loaded.current) return;
+    for (const label of popoutTargetsRef.current.keys()) {
+      emitTo(label, POPOUT_WORKSPACE, workspace).catch(() => {});
+    }
+  }, [workspace]);
+
   // save_workspace_dir rewrites the entire .relay directory from scratch
   // (deletes every file, re-serializes every request/folder/environment) —
   // debounced so rapid typing coalesces into one write instead of a full
   // directory rewrite per keystroke.
   useEffect(() => {
-    if (!loaded.current || !workspaceDir) return;
+    if (isPopout || !loaded.current || !workspaceDir) return;
     pendingSaveArgsRef.current = { dir: workspaceDir, data: JSON.stringify(workspace), hidden: workspaceHidden };
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
@@ -305,6 +439,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const openTab = useCallback(
     (id: string) => {
+      const existingPopout = [...popoutTargetsRef.current].find(([, nodeId]) => nodeId === id);
+      if (existingPopout) {
+        WebviewWindow.getByLabel(existingPopout[0]).then((child) => child?.setFocus()).catch(() => {});
+        return;
+      }
       const node = findNode(workspace.tree, id);
       if (!node || node.kind === "folder") return;
       setTabs((t) => {
@@ -347,8 +486,33 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setOpenTick((t) => t + 1);
   }, []);
 
+  const openTabInNewWindow = useCallback(async (id: string) => {
+    const tab = tabsRef.current.find((item) => item.nodeId === id);
+    if (!tab) return;
+    const existingPopout = [...popoutTargetsRef.current].find(([, nodeId]) => nodeId === id);
+    if (existingPopout) {
+      const existing = await WebviewWindow.getByLabel(existingPopout[0]);
+      await existing?.setFocus();
+      return;
+    }
+    const label = `request-${uid()}`;
+    popoutTargetsRef.current.set(label, id);
+    const child = new WebviewWindow(label, {
+      url: `/?popout=${encodeURIComponent(label)}`,
+      title: `${tab.kind === "grpc" ? "gRPC" : tab.draft.method} request — Relay`,
+      width: 1100, height: 760, minWidth: 650, minHeight: 450,
+    });
+    child.once("tauri://error", () => popoutTargetsRef.current.delete(label));
+    child.once("tauri://destroyed", () => popoutTargetsRef.current.delete(label));
+  }, []);
+
   const forceCloseTab = useCallback(
     (id: string) => {
+      if (isPopout) {
+        allowPopoutCloseRef.current = true;
+        getCurrentWindow().destroy().catch(() => {});
+        return;
+      }
       const cancelRef = grpcCancelRefs.current.get(id);
       if (cancelRef) {
         cancelRef.current = true;
@@ -400,6 +564,15 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const saveTab = useCallback((id: string) => {
+    if (isPopout) {
+      const tab = tabsRef.current.find((item) => item.nodeId === id);
+      if (tab) {
+        emitTo("main", POPOUT_SAVE, { nodeId: id, kind: tab.kind, draft: tab.draft } satisfies PopoutSave)
+          .then(() => setTabs((current) => current.map((item) => item.nodeId === id ? { ...item, dirty: false } : item)))
+          .catch(() => {});
+      }
+      return;
+    }
     setTabs((t) => {
       const tab = t.find((x) => x.nodeId === id);
       if (!tab) return t;
@@ -419,6 +592,21 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     (action: "save" | "discard" | "cancel") => {
       if (!pendingCloseId) return;
       if (action === "cancel") {
+        setPendingCloseId(null);
+        return;
+      }
+      if (isPopout) {
+        if (action === "save") {
+          const tab = tabsRef.current.find((item) => item.nodeId === pendingCloseId);
+          if (tab) {
+            emitTo("main", POPOUT_SAVE, { nodeId: tab.nodeId, kind: tab.kind, draft: tab.draft } satisfies PopoutSave)
+              .then(() => { allowPopoutCloseRef.current = true; return getCurrentWindow().destroy(); })
+              .catch(() => {});
+          }
+        } else {
+          allowPopoutCloseRef.current = true;
+          getCurrentWindow().destroy().catch(() => {});
+        }
         setPendingCloseId(null);
         return;
       }
@@ -479,15 +667,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const tab = tabs.find((item) => item.nodeId === id);
       if (!tab || tab.kind !== "grpc") return;
       const variables = Object.fromEntries(activeVariableRows(workspace).map((row) => [row.key, row.value]));
-      const resolvedUrl = resolveWorkspaceAddress(tab.draft.url, workspace);
-      const resolvedMessageJson = substituteVars(tab.draft.messageJson, variables) ?? tab.draft.messageJson;
-      const resolvedMetadata: [string, string][] = tab.draft.metadata
-        .filter((item) => item.enabled && item.key.trim())
-        .map((item): [string, string] => [
-          substituteVars(item.key, variables) ?? item.key,
-          substituteVars(item.value, variables) ?? item.value,
-        ])
-        .filter(([key]) => key.trim());
+      const execution = await prepareGrpcExecution(tab.draft, tab.draft.url, variables, safeMode);
+      const resolvedUrl = execution.url;
+      const resolvedMessageJson = execution.messageJson;
+      const resolvedMetadata = execution.metadata;
+      const finish = (response: GrpcResponseSummary) => finishGrpcExecution(tab.draft, execution, response, safeMode, applyVariableChanges);
       const cancelRef: { current: boolean; requestId?: string } = { current: false };
       grpcCancelRefs.current.set(id, cancelRef);
       setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: true, log: [], lastResponse: null } : x)));
@@ -537,7 +721,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           const body = result.cancelled
             ? JSON.stringify(receivedMessages.map((json) => JSON.parse(json)), null, 2)
             : result.json;
-          const lastResponse: GrpcResponseSummary = {
+          const lastResponse = await finish({
             ok: !result.cancelled,
             durationMs: result.durationMs,
             sizeBytes: result.cancelled ? new TextEncoder().encode(body).length : result.sizeBytes,
@@ -547,7 +731,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
             cancelled: result.cancelled,
             messageCount: result.cancelled ? receivedMessages.length : result.messageCount,
-          };
+          });
           setTabs((current) =>
             current.map((item) =>
               item.nodeId === id && item.kind === "grpc" ? { ...item, streaming: false, lastResponse } : item
@@ -557,7 +741,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         } catch (error) {
           const errorText = String(error);
           const errorEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "error", json: errorText };
-          const lastResponse: GrpcResponseSummary = {
+          const lastResponse = await finish({
             ok: false,
             durationMs: null,
             sizeBytes: 0,
@@ -565,7 +749,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             body: "",
             error: errorText,
             compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
-          };
+          });
           setTabs((current) =>
             current.map((item) =>
               item.nodeId === id && item.kind === "grpc"
@@ -598,7 +782,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           });
           if (cancelRef.current) return;
           const receivedEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "received", json: result.json };
-          const lastResponse: GrpcResponseSummary = {
+          const lastResponse = await finish({
             ok: true,
             durationMs: result.durationMs,
             sizeBytes: new TextEncoder().encode(result.json).length,
@@ -606,14 +790,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             body: result.json,
             error: null,
             compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
-          };
+          });
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [sentEntry, receivedEntry], streaming: false, lastResponse } : x)));
           cacheGrpcResponse(id, lastResponse);
         } catch (e: any) {
           if (cancelRef.current) return;
           const errText = String(e);
           const errEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "error", json: errText };
-          const lastResponse: GrpcResponseSummary = {
+          const lastResponse = await finish({
             ok: false,
             durationMs: null,
             sizeBytes: 0,
@@ -621,7 +805,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             body: "",
             error: errText,
             compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
-          };
+          });
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [sentEntry, errEntry], streaming: false, lastResponse } : x)));
           cacheGrpcResponse(id, lastResponse);
         } finally {
@@ -630,27 +814,30 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      const mockEntries: GrpcLogEntry[] = [];
       await simulateGrpcCall(
         {
           ...tab.draft,
           url: resolvedUrl,
           messageJson: resolvedMessageJson,
-          metadata: tab.draft.metadata.map((item) => ({
-            ...item,
-            key: substituteVars(item.key, variables) ?? item.key,
-            value: substituteVars(item.value, variables) ?? item.value,
-          })),
+          metadata: resolvedMetadata.map(([key, value]) => ({ id: uid(), key, value, enabled: true })),
         },
         (entry) => {
           if (cancelRef.current) return;
+          mockEntries.push(entry);
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [...x.log, entry] } : x)));
         },
         () => cancelRef.current
       );
-      setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: false } : x)));
+      const received = mockEntries.filter((entry) => entry.direction === "received");
+      const error = mockEntries.find((entry) => entry.direction === "error")?.json ?? null;
+      const body = received.length === 1 ? received[0].json : JSON.stringify(received.map((entry) => JSON.parse(entry.json)), null, 2);
+      const lastResponse = await finish({ ok: !error && !cancelRef.current, durationMs: null, sizeBytes: new TextEncoder().encode(body).length, metadata: [], body, error, cancelled: cancelRef.current, messageCount: received.length });
+      setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: false, lastResponse } : x)));
+      cacheGrpcResponse(id, lastResponse);
       grpcCancelRefs.current.delete(id);
     },
-    [tabs, workspace, cacheGrpcResponse]
+    [tabs, workspace, cacheGrpcResponse, safeMode, applyVariableChanges]
   );
 
   const cancelGrpcTab = useCallback(async (id: string) => {
@@ -703,6 +890,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       toggleCollapse,
       collapseAllFolders,
       openTab,
+      openTabInNewWindow,
       closeTab,
       closeOtherTabs,
       closeAllTabs,
@@ -750,7 +938,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       moveNodes,
       setProtoLibrary,
     }),
-    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, importGrpcApi, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, cancelGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importVariables, exportVariables, importBrunoCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, chooseExportFormat, pendingExport, confirmExport, cancelExport, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, moveNodes, setProtoLibrary]
+    [workspace, workspaceDir, openWorkspaceFolder, createWorkspace, workspaceOpenError, dismissWorkspaceOpenError, pendingWorkspaceSetup, confirmWorkspaceSetup, cancelWorkspaceSetup, renameWorkspace, responseCacheEnabled, setResponseCacheEnabled, mockServerPort, setMockServerPort, mockServerRunningPort, mockServerError, toggleMockServer, safeMode, setSafeMode, cookies, setCookies, tabs, activeTabId, openTick, addFolder, addRequest, addGrpcRequest, importGrpcApi, duplicateNode, renameNode, deleteNode, deleteNodes, toggleCollapse, collapseAllFolders, openTab, openTabInNewWindow, setActiveTab, closeTab, closeOtherTabs, closeAllTabs, updateDraft, updateGrpcDraft, saveTab, sendTab, sendGrpcTab, cancelGrpcTab, setVariables, pendingCloseId, confirmCloseTab, addEnvironment, deleteEnvironment, renameEnvironment, setActiveEnvironment, setEnvironmentVariables, importCollection, importVariables, exportVariables, importBrunoCollection, importIntoFolder, pendingImport, confirmImport, cancelImport, importError, dismissImportError, exportCollection, chooseExportFormat, pendingExport, confirmExport, cancelExport, applyVariableChanges, runnerOpen, openRunner, closeRunner, envModalTarget, openEnvironmentModal, closeEnvironmentModal, curlImportOpen, curlImportParentId, openCurlImport, closeCurlImport, moveNodes, setProtoLibrary]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

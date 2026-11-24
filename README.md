@@ -21,7 +21,7 @@ Requests run **natively through Rust** (`reqwest` for HTTP, `tonic`/`prost` for 
 - Params ⟷ URL two-way sync, path variables (`:id`), bulk edit mode
 - Body: JSON, raw, form-urlencoded, multipart (real file uploads)
 - **Auth tab**: Bearer, Basic, AWS SigV4, OAuth2 (Authorization Code + PKCE)
-- Pre-request & test scripts (`pm` API, Postman-compatible subset) with autocomplete
+- Pre-request & test scripts (`relay` API) with autocomplete; imported Postman scripts are converted from `pm` automatically
 - `{{variable}}` autocomplete/highlighting, environment & global variables
 - Import Postman collections (v2.1) and OpenAPI 3.x specs; export back out
 

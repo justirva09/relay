@@ -7,7 +7,7 @@ import FormDataEditor from "./FormDataEditor";
 import CodeEditor from "./CodeEditor";
 import ResizableCodeEditor from "./ResizableCodeEditor";
 import CodeSnippetModal from "./CodeSnippetModal";
-import { PM_PRE_COMPLETIONS, PM_TEST_COMPLETIONS } from "../lib/pmCompletions";
+import { RELAY_PRE_COMPLETIONS, RELAY_TEST_COMPLETIONS } from "../lib/pmCompletions";
 import { useWorkspace } from "../store";
 import SimpleSelect from "./SimpleSelect";
 import ContractCheckModal from "./ContractCheckModal";
@@ -26,14 +26,14 @@ import { COMMON_HTTP_HEADERS } from "../lib/httpHeaders";
 import { activeVariableGroups } from "../lib/variableResolution";
 
 const PRE_PLACEHOLDER = `// runs before the request is sent
-// pm.environment.set("token", "abc123")
-// pm.request.headers.add({ key: "X-Trace", value: Date.now() })
-// pm.request.url = pm.request.url + "&debug=1"`;
+// relay.environment.set("token", "abc123")
+// relay.request.headers.add({ key: "X-Trace", value: Date.now() })
+// relay.request.url = relay.request.url + "&debug=1"`;
 
 const TEST_PLACEHOLDER = `// runs after the response comes back
-// pm.test("status is 200", () => pm.expect(pm.response.code).to.equal(200))
-// pm.test("has id", () => pm.expect(pm.response.json().id).to.be.a("number"))
-// pm.environment.set("lastId", pm.response.json().id)`;
+// relay.test("status is 200", () => relay.expect(relay.response.code).to.equal(200))
+// relay.test("has id", () => relay.expect(relay.response.json().id).to.be.a("number"))
+// relay.environment.set("lastId", relay.response.json().id)`;
 
 interface Props {
   nodeId: string;
@@ -575,11 +575,11 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
                     value={draft.preScript}
                     onChange={(v) => onChange({ preScript: v })}
                     placeholder={PRE_PLACEHOLDER}
-                    completions={PM_PRE_COMPLETIONS}
+                    completions={RELAY_PRE_COMPLETIONS}
                     variables={variableGroups}
                     className="flex-1 min-h-0 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
                   />
-                  <span className="text-[11px] text-th-text-4 font-mono shrink-0">runs before send · pm.environment, pm.variables, pm.request, crypto (CryptoJS), require("crypto-js")</span>
+                  <span className="text-[11px] text-th-text-4 font-mono shrink-0">runs before send · relay.environment, relay.variables, relay.request, require("crypto-js")</span>
                 </>
               ) : (
                 <>
@@ -587,11 +587,11 @@ export default function RequestPanel({ nodeId, draft, loading, dirty, onChange, 
                     value={draft.testScript}
                     onChange={(v) => onChange({ testScript: v })}
                     placeholder={TEST_PLACEHOLDER}
-                    completions={PM_TEST_COMPLETIONS}
+                    completions={RELAY_TEST_COMPLETIONS}
                     variables={variableGroups}
                     className="flex-1 min-h-0 bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus"
                   />
-                  <span className="text-[11px] text-th-text-4 font-mono shrink-0">runs after response · pm.test, pm.expect, pm.response</span>
+                  <span className="text-[11px] text-th-text-4 font-mono shrink-0">runs after response · relay.test, relay.expect, relay.response</span>
                 </>
               )}
             </div>

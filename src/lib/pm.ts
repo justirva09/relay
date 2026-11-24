@@ -87,7 +87,7 @@ function makeExpect(actual: any) {
   };
 }
 
-export function buildPm(opts: {
+export function buildRelay(opts: {
   variables: Record<string, string>;
   scriptRequest?: ScriptRequest;
   response?: ScriptResponse;
@@ -173,3 +173,6 @@ export function buildPm(opts: {
     expect: makeExpect,
   };
 }
+
+// Saved scripts created before the Relay scripting API was named still run.
+export const buildPm = buildRelay;

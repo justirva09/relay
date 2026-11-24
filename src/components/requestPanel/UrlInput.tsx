@@ -17,6 +17,7 @@ export default function UrlInput({ value, onChange, onKeyDown, placeholder, vari
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const overlayContentRef = useRef<HTMLSpanElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
   const { menu, recompute, close, move, hover, apply } = useVariableMenu(variables);
@@ -25,8 +26,8 @@ export default function UrlInput({ value, onChange, onKeyDown, placeholder, vari
   const modifierHeld = useModifierHeld();
 
   const syncScroll = () => {
-    if (inputRef.current && overlayRef.current) {
-      overlayRef.current.scrollLeft = inputRef.current.scrollLeft;
+    if (inputRef.current && overlayContentRef.current) {
+      overlayContentRef.current.style.transform = `translateX(${-inputRef.current.scrollLeft}px)`;
     }
   };
 
@@ -60,8 +61,12 @@ export default function UrlInput({ value, onChange, onKeyDown, placeholder, vari
           inputRef.current?.focus();
         }}
       >
-        <div ref={overlayRef} className="px-3 py-2 text-[13px] font-mono whitespace-pre overflow-hidden pointer-events-none" aria-hidden>
-          {value ? highlightUrlTokens(value, true, variables) : <span className="text-th-text-4">{placeholder}</span>}
+        <div ref={overlayRef} className="px-3 py-2 text-[13px] font-mono pointer-events-none" aria-hidden>
+          <span className="block overflow-hidden whitespace-pre">
+            <span ref={overlayContentRef} className="block w-max whitespace-pre">
+              {value ? highlightUrlTokens(value, true, variables) : <span className="text-th-text-4">{placeholder}</span>}
+            </span>
+          </span>
         </div>
         <input
           ref={inputRef}

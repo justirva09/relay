@@ -3,7 +3,7 @@ import { TestResultDraft } from "./pm";
 // self-contained runtime embedded in the sandbox iframe's srcdoc. can't import
 // anything from this app's bundle, the iframe is a genuinely separate document/
 // global scope on purpose: no window.__TAURI_INTERNALS__, no access to this
-// page's JS at all. minimal reimplementation of buildPm() from pm.ts
+// page's JS at all. minimal reimplementation of buildRelay() from pm.ts
 // (test/expect/environment/variables/request/response only, no crypto-js),
 // kept in sync by hand since the two can't share code
 const SANDBOX_RUNTIME = `
@@ -35,22 +35,33 @@ const SANDBOX_RUNTIME = `
     var response = msg.response;
     var error = null;
 
-    var setVar = function (k, v) { variables[k] = v; varChanges[k] = v; };
+    var setVar = function (k, v) { variables[k] = String(v); varChanges[k] = String(v); };
     var envAPI = { get: function (k) { return variables[k]; }, set: setVar, has: function (k) { return variables[k] !== undefined; } };
 
-    var pm = {
+    var relay = {
       environment: envAPI,
       variables: envAPI,
       request: scriptRequest ? {
         get url() { return scriptRequest.url; },
         set url(v) { scriptRequest.url = v; },
-        method: scriptRequest.method,
+        get method() { return scriptRequest.method; },
+        set method(v) { scriptRequest.method = v; },
+        get body() {
+          var raw = scriptRequest.body || "";
+          return { raw: raw, mode: "raw", toString: function () { return raw; } };
+        },
+        set body(v) { scriptRequest.body = v && typeof v === "object" ? v.raw : v; },
         headers: {
           add: function (h) { scriptRequest.headers.push({ key: h.key, value: h.value }); },
           upsert: function (h) {
             var i = scriptRequest.headers.findIndex(function (x) { return x.key.toLowerCase() === String(h.key).toLowerCase(); });
             if (i >= 0) scriptRequest.headers[i] = { key: h.key, value: h.value };
             else scriptRequest.headers.push({ key: h.key, value: h.value });
+          },
+          remove: function (key) { scriptRequest.headers = scriptRequest.headers.filter(function (h) { return h.key.toLowerCase() !== String(key).toLowerCase(); }); },
+          get: function (key) {
+            var found = scriptRequest.headers.find(function (h) { return h.key.toLowerCase() === String(key).toLowerCase(); });
+            return found ? found.value : undefined;
           }
         }
       } : undefined,
@@ -84,8 +95,8 @@ const SANDBOX_RUNTIME = `
     };
 
     try {
-      var fn = new Function("pm", "console", "require", msg.script);
-      fn(pm, consoleShim, requireShim);
+      var fn = new Function("relay", "pm", "console", "require", msg.script);
+      fn(relay, relay, consoleShim, requireShim);
     } catch (e) {
       error = e && e.message ? e.message : String(e);
     }

@@ -1,4 +1,4 @@
-// Autocomplete data for the script editors. Mirrors the real pm API in
+// Autocomplete data for the script editors. Mirrors the Relay script API in
 // pm.ts so suggestions never drift from what a script can actually call.
 export interface CompletionItem {
   label: string;
@@ -84,12 +84,12 @@ const EXPECT: CompletionItem = {
   hasArgs: true,
 };
 
-export const PM_PRE_COMPLETIONS: CompletionItem[] = [ENVIRONMENT, VARIABLES, REQUEST];
-export const PM_TEST_COMPLETIONS: CompletionItem[] = [ENVIRONMENT, VARIABLES, RESPONSE, TEST, EXPECT];
+export const RELAY_PRE_COMPLETIONS: CompletionItem[] = [ENVIRONMENT, VARIABLES, REQUEST];
+export const RELAY_TEST_COMPLETIONS: CompletionItem[] = [ENVIRONMENT, VARIABLES, RESPONSE, TEST, EXPECT];
 
-// The ".to." chain in pm.expect(x).to.equal() isn't reachable by walking
-// down from "pm" (there's a function call in between), so it gets its own
-// completion root triggered on ".to." instead of a "pm." prefix.
+// The ".to." chain in relay.expect(x).to.equal() isn't reachable by walking
+// down from "relay" (there's a function call in between), so it gets its own
+// completion root triggered on ".to." instead of a "relay." prefix.
 export const ASSERTION_ROOT: CompletionItem = {
   label: "to",
   detail: "namespace",

@@ -3,6 +3,7 @@ import { highlightJS, highlightJSON, isJsonLike, escapeHtml } from "../lib/highl
 import { CompletionItem, ASSERTION_ROOT } from "../lib/pmCompletions";
 import { ProtoFieldSchema } from "../lib/grpcClient";
 import { VariableGroup } from "../lib/useVariableMenu";
+import AnchorPortal from "./AnchorPortal";
 
 interface Props {
   value: string;
@@ -43,7 +44,7 @@ function isPairAt(opener: string | undefined, closer: string | undefined): boole
   return opener !== undefined && Object.prototype.hasOwnProperty.call(AUTO_PAIRS, opener) && AUTO_PAIRS[opener] === closer;
 }
 
-// grabs the dot chain ending at pos (e.g. "pm.re"), splits into typed path + partial word
+// grabs the dot chain ending at pos (e.g. "relay.re"), splits into typed path + partial word
 function chainAt(value: string, pos: number): { path: string[]; partial: string; replaceFrom: number } | null {
   const before = value.slice(0, pos);
   const match = /[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.?$/.exec(before);
@@ -51,7 +52,7 @@ function chainAt(value: string, pos: number): { path: string[]; partial: string;
   const parts = match[0].split(".");
   const partial = parts[parts.length - 1];
   const path = parts.slice(0, -1);
-  if (path.length === 0) return null; // need at least "pm." or "to." typed
+  if (path.length === 0) return null; // need at least "relay." or "to." typed
   return { path, partial, replaceFrom: pos - partial.length };
 }
 
@@ -59,7 +60,7 @@ function resolvePmCompletions(path: string[], partial: string, pmRoot: Completio
   const [head, ...rest] = path;
   let node: CompletionItem | undefined;
   let siblings: CompletionItem[];
-  if (head === "pm") {
+  if (head === "relay" || head === "pm") {
     siblings = pmRoot;
   } else if (head === "to") {
     siblings = ASSERTION_ROOT.children!;
@@ -246,7 +247,7 @@ function resolveProtoValueCompletions(
   if (!field || field.kind !== "enum" || !field.enumValues) return [];
   const lower = partial.toLowerCase();
   return field.enumValues
-    .filter((value) => value.toLowerCase().startsWith(lower))
+    .filter((value) => value.toLowerCase().includes(lower))
     .map((value) => ({ label: value, detail: field.typeName || "enum", insertText: value }));
 }
 
@@ -262,6 +263,7 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
 
   // once we rewrite value ourselves for auto-pair/auto-indent (preventDefault + programmatic
@@ -577,7 +579,7 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
     : `<span class="text-th-text-4">${escapeHtml(placeholder || "")}</span>`, [value, placeholder]);
 
   return (
-    <div className={`relative flex ${className}`}>
+    <div ref={editorRef} className={`relative flex ${className}`}>
       <div
         ref={gutterRef}
         aria-hidden
@@ -609,11 +611,12 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
           style={{ caretColor: "var(--c-text-1)" }}
         />
         {menu && (
+          <AnchorPortal anchorRef={editorRef}>
           <div
-            className="absolute z-50 min-w-[180px] max-w-[280px] bg-th-elevated border border-th-border rounded-md shadow-xl py-1 font-mono text-[12px] overflow-hidden"
+            className="absolute z-[100] w-[min(360px,calc(100vw-16px))] max-h-[min(320px,50vh)] overflow-y-auto bg-th-elevated border border-th-border rounded-md shadow-xl py-1 font-mono text-[12px]"
             style={{
-              left: `calc(${menu.col}ch + 0.75rem - ${textareaRef.current?.scrollLeft ?? 0}px)`,
-              top: `calc(${(menu.line + 1) * LINE_HEIGHT_PX}px + 0.5rem - ${textareaRef.current?.scrollTop ?? 0}px)`,
+              left: `clamp(8px, calc(${menu.col}ch + 0.75rem + ${(editorRef.current?.clientWidth ?? 0) - (textareaRef.current?.clientWidth ?? 0)}px - ${textareaRef.current?.scrollLeft ?? 0}px), max(8px, calc(100vw - 368px - ${editorRef.current?.getBoundingClientRect().left ?? 0}px)))`,
+              top: `clamp(0px, calc(${(menu.line + 1) * LINE_HEIGHT_PX}px + 0.5rem - ${textareaRef.current?.scrollTop ?? 0}px), max(0px, calc(100vh - 324px - ${editorRef.current?.getBoundingClientRect().top ?? 0}px)))`,
             }}
           >
             {menu.items.map((item, i) => (
@@ -621,6 +624,7 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
                 key={item.label}
                 onMouseDown={(e) => { e.preventDefault(); insertCompletion(item); }}
                 onMouseEnter={() => setMenu((m) => (m ? { ...m, activeIndex: i } : m))}
+                title={`${item.label} — ${item.detail}`}
                 className={`w-full flex items-center justify-between gap-3 px-2.5 py-1 text-left ${
                   i === menu.activeIndex ? "bg-th-hover" : ""
                 }`}
@@ -633,6 +637,7 @@ export default function CodeEditor({ value, onChange, placeholder, className = "
               </button>
             ))}
           </div>
+          </AnchorPortal>
         )}
       </div>
     </div>

@@ -1,9 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { GrpcRequestData, GrpcMethodType, defaultGrpcRequestSettings, defaultMessageForMethodType } from "../../types";
+import { GrpcRequestData, GrpcMethodType, defaultGrpcRequestSettings, defaultMessageForMethodType, defaultOAuth2 } from "../../types";
 import { MOCK_GRPC_SERVICES } from "../../lib/grpcMock";
 import { listGrpcServices, listGrpcServicesFromProto, listProtoServiceFiles, fetchGrpcMethodSchema, GrpcCatalogService, ProtoFieldSchema } from "../../lib/grpcClient";
 import ResizableCodeEditor from "../ResizableCodeEditor";
-import KeyValueEditor from "../KeyValueEditor";
+import KeyValueEditor, { ValueInput } from "../KeyValueEditor";
+import CodeEditor from "../CodeEditor";
+import SimpleSelect from "../SimpleSelect";
+import { RELAY_PRE_COMPLETIONS, RELAY_TEST_COMPLETIONS } from "../../lib/pmCompletions";
+import { runAuthorizationCodePkceFlow } from "../../lib/oauth2";
 import GrpcServicePicker from "./GrpcServicePicker";
 import FloatingMenu from "../FloatingMenu";
 import { useWorkspace } from "../../store";
@@ -277,7 +281,10 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
   const resolvedUrl = resolveWorkspaceAddress(draft.url, workspace);
   const variableGroups = useMemo(() => activeVariableGroups(workspace), [workspace]);
   const variableInfo = useMemo(() => buildVariableInfo(workspace), [workspace]);
-  const [tab, setTab] = useState<"message" | "metadata" | "settings" | "definition">("message");
+  const [tab, setTab] = useState<"message" | "auth" | "metadata" | "scripts" | "settings" | "definition">("message");
+  const [scriptTab, setScriptTab] = useState<"pre" | "post">("pre");
+  const [oauthLoading, setOauthLoading] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
   const [serviceFiles, setServiceFiles] = useState<Set<string>>(new Set());
   const [schemaFields, setSchemaFields] = useState<ProtoFieldSchema[] | undefined>(undefined);
   const [sampleSeed, setSampleSeed] = useState(randomGrpcSampleSeed);
@@ -424,7 +431,9 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
           {(
             [
               ["message", "Message"],
+              ["auth", "Authorization"],
               ["metadata", `Metadata${enabledMetadataCount ? ` (${enabledMetadataCount})` : ""}`],
+              ["scripts", "Scripts"],
               ["settings", "Settings"],
               ["definition", "Service definition"],
             ] as const
@@ -442,7 +451,44 @@ export default function GrpcPanel({ draft, streaming, onChange, onSend, onCancel
         </div>
       </div>
 
-      <div className="px-4 py-3">
+      <div className="px-4 py-3 min-w-0">
+        {tab === "auth" && (
+          <div className="flex flex-col gap-3 max-w-md">
+            <label className="text-[11px] font-mono text-th-text-3 uppercase">Type</label>
+            <SimpleSelect value={draft.auth.type} onChange={(type) => onChange({ auth: { ...draft.auth, type: type as GrpcRequestData["auth"]["type"] } })} options={[
+              { value: "none", label: "No Auth" }, { value: "bearer", label: "Bearer Token" },
+              { value: "basic", label: "Basic Auth" }, { value: "oauth2", label: "OAuth 2.0" },
+            ]} />
+            {draft.auth.type === "bearer" && <ValueInput value={draft.auth.bearer?.token ?? ""} onChange={(token) => onChange({ auth: { ...draft.auth, bearer: { token } } })} placeholder="{{token}}" variables={variableGroups} variableInfo={variableInfo} />}
+            {draft.auth.type === "basic" && <>
+              <label className="text-[11px] font-mono text-th-text-3 uppercase">Username</label>
+              <ValueInput value={draft.auth.basic?.username ?? ""} onChange={(username) => onChange({ auth: { ...draft.auth, basic: { username, password: draft.auth.basic?.password ?? "" } } })} placeholder="username" variables={variableGroups} />
+              <label className="text-[11px] font-mono text-th-text-3 uppercase">Password</label>
+              <ValueInput value={draft.auth.basic?.password ?? ""} onChange={(password) => onChange({ auth: { ...draft.auth, basic: { username: draft.auth.basic?.username ?? "", password } } })} placeholder="password" variables={variableGroups} />
+            </>}
+            {draft.auth.type === "oauth2" && <>
+              <label className="text-[11px] font-mono text-th-text-3 uppercase">Authorization URL</label>
+              <ValueInput value={draft.auth.oauth2?.authUrl ?? ""} onChange={(authUrl) => onChange({ auth: { ...draft.auth, oauth2: { ...(draft.auth.oauth2 ?? defaultOAuth2()), authUrl } } })} placeholder="https://provider.com/oauth/authorize" variables={variableGroups} />
+              <label className="text-[11px] font-mono text-th-text-3 uppercase">Token URL</label>
+              <ValueInput value={draft.auth.oauth2?.tokenUrl ?? ""} onChange={(tokenUrl) => onChange({ auth: { ...draft.auth, oauth2: { ...(draft.auth.oauth2 ?? defaultOAuth2()), tokenUrl } } })} placeholder="https://provider.com/oauth/token" variables={variableGroups} />
+              <label className="text-[11px] font-mono text-th-text-3 uppercase">Client ID</label>
+              <ValueInput value={draft.auth.oauth2?.clientId ?? ""} onChange={(clientId) => onChange({ auth: { ...draft.auth, oauth2: { ...(draft.auth.oauth2 ?? defaultOAuth2()), clientId } } })} placeholder="client id" variables={variableGroups} />
+              <label className="text-[11px] font-mono text-th-text-3 uppercase">Client Secret (optional)</label>
+              <ValueInput value={draft.auth.oauth2?.clientSecret ?? ""} onChange={(clientSecret) => onChange({ auth: { ...draft.auth, oauth2: { ...(draft.auth.oauth2 ?? defaultOAuth2()), clientSecret } } })} placeholder="client secret" variables={variableGroups} />
+              <label className="text-[11px] font-mono text-th-text-3 uppercase">Scope</label>
+              <ValueInput value={draft.auth.oauth2?.scope ?? ""} onChange={(scope) => onChange({ auth: { ...draft.auth, oauth2: { ...(draft.auth.oauth2 ?? defaultOAuth2()), scope } } })} placeholder="openid profile" variables={variableGroups} />
+              <label className="text-[11px] font-mono text-th-text-3 uppercase">Redirect Port</label>
+              <input type="number" min={1} value={draft.auth.oauth2?.redirectPort ?? defaultOAuth2().redirectPort} onChange={(e) => onChange({ auth: { ...draft.auth, oauth2: { ...(draft.auth.oauth2 ?? defaultOAuth2()), redirectPort: Math.max(1, Number(e.target.value) || 1) } } })} className="w-28 bg-th-surface border border-th-border-input rounded-md px-2.5 py-1.5 text-[13px] font-mono text-th-text-1" />
+              <button disabled={oauthLoading} onClick={async () => { setOauthLoading(true); setOauthError(null); try { const result = await runAuthorizationCodePkceFlow(draft.auth.oauth2 ?? defaultOAuth2()); onChange({ auth: { ...draft.auth, oauth2: { ...(draft.auth.oauth2 ?? defaultOAuth2()), accessToken: result.accessToken, refreshToken: result.refreshToken, expiresAt: result.expiresAt } } }); } catch (error) { setOauthError(String(error)); } finally { setOauthLoading(false); } }} className="self-start px-3 py-1.5 rounded-md text-[12.5px] font-semibold bg-th-accent text-white disabled:opacity-60">{oauthLoading ? "Waiting for browser…" : "Get New Access Token"}</button>
+              {oauthError && <p className="text-[11.5px] text-rose-400">{oauthError}</p>}
+              {draft.auth.oauth2?.accessToken && <p className="text-[11.5px] text-emerald-400">Token acquired</p>}
+            </>}
+          </div>
+        )}
+        {tab === "scripts" && <div className="flex gap-3 min-h-[260px]">
+          <div className="w-[130px] shrink-0 flex flex-col gap-1">{([ ["pre", "Pre-request"], ["post", "Post-response"] ] as const).map(([key, label]) => <button key={key} onClick={() => setScriptTab(key)} className={`px-2.5 py-1.5 rounded-md text-[12.5px] text-left ${scriptTab === key ? "bg-th-accent-bg text-th-accent-text" : "text-th-text-2 hover:bg-th-hover"}`}>{label}</button>)}</div>
+          <CodeEditor key={scriptTab} value={scriptTab === "pre" ? draft.preScript : draft.testScript} onChange={(value) => onChange(scriptTab === "pre" ? { preScript: value } : { testScript: value })} placeholder={scriptTab === "pre" ? "// relay.request.headers.add({ key: 'x-trace', value: '123' })" : "// relay.test('response is OK', () => relay.expect(relay.response.code).to.equal(200))"} completions={scriptTab === "pre" ? RELAY_PRE_COMPLETIONS : RELAY_TEST_COMPLETIONS} variables={variableGroups} className="flex-1 min-w-0 min-h-[260px] bg-th-surface border border-th-border-input rounded-md focus-within:border-th-border-focus" />
+        </div>}
         {tab === "message" && (
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-3">

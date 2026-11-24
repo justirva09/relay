@@ -157,6 +157,9 @@ export interface GrpcRequestData {
   methodType: GrpcMethodType;
   messageJson: string;
   metadata: KVRow[];
+  auth: Pick<AuthConfig, "type" | "bearer" | "basic" | "oauth2">;
+  preScript: string;
+  testScript: string;
   protoSource: "reflection" | "imported";
   activeProtoFile?: string;
   settings: GrpcRequestSettings;
@@ -260,6 +263,9 @@ export interface GrpcResponseSummary {
   metadata: [string, string][];
   body: string;
   error: string | null;
+  testResults?: TestResult[];
+  scriptLogs?: string[];
+  preError?: string | null;
   compression?: "gzip";
   cancelled?: boolean;
   messageCount?: number;
@@ -344,6 +350,9 @@ export function normalizeGrpcRequestData(req: any): GrpcRequestData {
   const maxResponseSizeMb = Number(settings.maxResponseSizeMb);
   return {
     ...req,
+    auth: req.auth && typeof req.auth === "object" ? req.auth : defaultAuth(),
+    preScript: typeof req.preScript === "string" ? req.preScript : "",
+    testScript: typeof req.testScript === "string" ? req.testScript : "",
     settings: {
       timeoutMs: Number.isInteger(timeoutMs) && timeoutMs >= 0 ? timeoutMs : defaults.timeoutMs,
       waitForReady: typeof settings.waitForReady === "boolean" ? settings.waitForReady : defaults.waitForReady,
@@ -419,6 +428,9 @@ export function defaultGrpcRequest(url = "grpc://localhost:50051"): GrpcRequestD
     methodType: "unary",
     messageJson: "{}",
     metadata: [newRow()],
+    auth: defaultAuth(),
+    preScript: "",
+    testScript: "",
     protoSource: "reflection",
     settings: defaultGrpcRequestSettings(),
   };
