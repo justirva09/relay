@@ -1,4 +1,5 @@
 import { TreeNode, FolderNode, RequestNode, KVRow, Method, BodyMode, FormDataRow, AuthConfig, Environment, defaultAuth, defaultRequest, defaultRequestSettings, newRow, newFormDataRow, uid, parseQueryToRows, parsePathParamsFromUrl } from "../types";
+import { rewriteScriptNamespace } from "./scriptDialect";
 
 const POSTMAN_SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
 
@@ -99,12 +100,20 @@ interface PostmanItem {
   name?: string;
   item?: PostmanItem[];
   request?: PostmanRequest;
+  event?: PostmanEvent[];
+}
+
+interface PostmanEvent {
+  listen?: "prerequest" | "test" | string;
+  script?: { exec?: string[] | string; type?: string };
+  disabled?: boolean;
 }
 
 interface PostmanCollection {
   info?: { name?: string; schema?: string; _postman_id?: string };
   item?: PostmanItem[];
   variable?: { key: string; value: string; type?: string; disabled?: boolean }[];
+  event?: PostmanEvent[];
 }
 
 export function isPostmanCollection(data: any): data is PostmanCollection {
@@ -143,13 +152,23 @@ function extractUrl(url: string | PostmanUrl | undefined): string {
   return url.raw || "";
 }
 
-function parsePostmanItem(item: PostmanItem): TreeNode {
+function eventScripts(events: PostmanEvent[] | undefined, listen: string): string[] {
+  return (events ?? [])
+    .filter((event) => event.listen === listen && !event.disabled)
+    .map((event) => Array.isArray(event.script?.exec) ? event.script.exec.join("\n") : event.script?.exec ?? "")
+    .filter((script) => script.trim())
+    .map((script) => rewriteScriptNamespace(script, "pm", "relay"));
+}
+
+function parsePostmanItem(item: PostmanItem, inheritedPre: string[], inheritedPost: string[]): TreeNode {
+  const pre = [...inheritedPre, ...eventScripts(item.event, "prerequest")];
+  const post = [...inheritedPost, ...eventScripts(item.event, "test")];
   if (item.item && !item.request) {
     const folder: FolderNode = {
       id: uid(),
       kind: "folder",
       name: item.name || "Folder",
-      children: item.item.map(parsePostmanItem),
+      children: item.item.map((child) => parsePostmanItem(child, pre, post)),
     };
     return folder;
   }
@@ -220,8 +239,8 @@ function parsePostmanItem(item: PostmanItem): TreeNode {
       bodyText,
       bodyForm,
       bodyUrlencoded,
-      preScript: "",
-      testScript: "",
+      preScript: pre.join("\n\n"),
+      testScript: post.join("\n\n"),
       examples: [],
       tags: [],
       settings: defaultRequestSettings(),
@@ -232,7 +251,9 @@ function parsePostmanItem(item: PostmanItem): TreeNode {
 
 export function postmanToTree(data: PostmanCollection): { tree: TreeNode[]; name: string; variables: KVRow[] } {
   const items = data.item || [];
-  const tree = items.map(parsePostmanItem);
+  const collectionPre = eventScripts(data.event, "prerequest");
+  const collectionPost = eventScripts(data.event, "test");
+  const tree = items.map((item) => parsePostmanItem(item, collectionPre, collectionPost));
   const variables = (data.variable || []).map((item) => ({
     id: uid(), key: item.key, value: String(item.value ?? ""), enabled: !item.disabled, secret: item.type === "secret",
   }));
@@ -299,6 +320,10 @@ function treeNodeToPostmanItem(node: TreeNode): PostmanItem | null {
 
   return {
     name: node.name,
+    event: [
+      ...(req.preScript.trim() ? [{ listen: "prerequest", script: { type: "text/javascript", exec: rewriteScriptNamespace(req.preScript, "relay", "pm").split("\n") } }] : []),
+      ...(req.testScript.trim() ? [{ listen: "test", script: { type: "text/javascript", exec: rewriteScriptNamespace(req.testScript, "relay", "pm").split("\n") } }] : []),
+    ],
     request: {
       method: req.method,
       header: headers.length > 0 ? headers : undefined,

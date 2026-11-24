@@ -26,7 +26,7 @@ function errorBadge(error: string): string {
 }
 
 function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
-  const [tab, setTab] = useState<"body" | "metadata">("body");
+  const [tab, setTab] = useState<"body" | "metadata" | "tests" | "console">("body");
   const [copied, setCopied] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -39,6 +39,8 @@ function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
   const tabs: { key: typeof tab; label: string }[] = [
     { key: "body", label: "Body" },
     { key: "metadata", label: `Metadata (${response.metadata.length})` },
+    { key: "tests", label: `Tests (${response.testResults?.length ?? 0})` },
+    { key: "console", label: `Console (${(response.scriptLogs?.length ?? 0) + (response.preError ? 1 : 0)})` },
   ];
 
   useEffect(() => {
@@ -121,7 +123,7 @@ function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
         )}
       </div>
 
-      {!response.error && (
+      <>
         <div className="px-4 mt-1">
           <div className="flex items-center justify-between border-b border-th-border text-[12.5px] font-mono">
             <div className="flex items-center gap-4">
@@ -171,10 +173,10 @@ function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
             )}
           </div>
         </div>
-      )}
+      </>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
-        {response.error ? (
+        {response.error && tab === "body" ? (
           <div className="flex flex-col items-center justify-center py-10 gap-5">
             <div className="w-14 h-14 rounded-full bg-rose-500/10 ring-1 ring-rose-500/20 grid place-items-center">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" className="text-rose-400">
@@ -186,6 +188,10 @@ function StructuredResponse({ response }: { response: GrpcResponseSummary }) {
               <p className="text-[12.5px] font-mono text-rose-300 leading-relaxed">{response.error}</p>
             </div>
           </div>
+        ) : tab === "tests" ? (
+          <div className="flex flex-col gap-2 font-mono text-[12.5px]">{response.testResults?.length ? response.testResults.map((result, index) => <div key={index} className={result.passed ? "text-emerald-400" : "text-rose-400"}>{result.passed ? "PASS" : "FAIL"} · {result.name}{result.error ? ` — ${result.error}` : ""}</div>) : <span className="text-th-text-4">no tests</span>}</div>
+        ) : tab === "console" ? (
+          <div className="flex flex-col gap-1 font-mono text-[12.5px]">{response.preError && <div className="text-rose-400">Pre-request script error: {response.preError}</div>}{response.scriptLogs?.map((line, index) => <div key={index} className="text-th-text-2 whitespace-pre-wrap break-all">{line}</div>)}{!response.preError && !response.scriptLogs?.length && <span className="text-th-text-4">no output</span>}</div>
         ) : tab === "body" ? (
           response.body ? (
             <div ref={bodyContentRef}>
@@ -291,7 +297,7 @@ export default function GrpcResponsePanel({ log, streaming, methodType, lastResp
     if (streaming) setMode(methodType === "unary" ? "response" : "log");
   }, [streaming, methodType]);
 
-  if (log.length === 0 && !streaming) {
+  if (log.length === 0 && !streaming && !lastResponse) {
     return (
       <div
         className="h-full grid place-items-center text-th-text-4 text-[13px] font-mono"

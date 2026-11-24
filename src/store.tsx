@@ -11,8 +11,8 @@ import { useSafeMode } from "./store/useSafeMode";
 import { useResponseCache } from "./store/useResponseCache";
 import { useEnvironments } from "./store/useEnvironments";
 import { GrpcApiImportService, useTreeActions } from "./store/useTreeActions";
-import { activeVariableRows, resolveWorkspaceAddress } from "./lib/variableResolution";
-import { substituteVars } from "./lib/pm";
+import { activeVariableRows } from "./lib/variableResolution";
+import { prepareGrpcExecution, finishGrpcExecution } from "./lib/grpcExecution";
 import { ImportPayload, ImportStats, useImportExport } from "./store/useImportExport";
 
 interface Ctx {
@@ -479,15 +479,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const tab = tabs.find((item) => item.nodeId === id);
       if (!tab || tab.kind !== "grpc") return;
       const variables = Object.fromEntries(activeVariableRows(workspace).map((row) => [row.key, row.value]));
-      const resolvedUrl = resolveWorkspaceAddress(tab.draft.url, workspace);
-      const resolvedMessageJson = substituteVars(tab.draft.messageJson, variables) ?? tab.draft.messageJson;
-      const resolvedMetadata: [string, string][] = tab.draft.metadata
-        .filter((item) => item.enabled && item.key.trim())
-        .map((item): [string, string] => [
-          substituteVars(item.key, variables) ?? item.key,
-          substituteVars(item.value, variables) ?? item.value,
-        ])
-        .filter(([key]) => key.trim());
+      const execution = await prepareGrpcExecution(tab.draft, tab.draft.url, variables, safeMode);
+      const resolvedUrl = execution.url;
+      const resolvedMessageJson = execution.messageJson;
+      const resolvedMetadata = execution.metadata;
+      const finish = (response: GrpcResponseSummary) => finishGrpcExecution(tab.draft, execution, response, safeMode, applyVariableChanges);
       const cancelRef: { current: boolean; requestId?: string } = { current: false };
       grpcCancelRefs.current.set(id, cancelRef);
       setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: true, log: [], lastResponse: null } : x)));
@@ -537,7 +533,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           const body = result.cancelled
             ? JSON.stringify(receivedMessages.map((json) => JSON.parse(json)), null, 2)
             : result.json;
-          const lastResponse: GrpcResponseSummary = {
+          const lastResponse = await finish({
             ok: !result.cancelled,
             durationMs: result.durationMs,
             sizeBytes: result.cancelled ? new TextEncoder().encode(body).length : result.sizeBytes,
@@ -547,7 +543,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
             cancelled: result.cancelled,
             messageCount: result.cancelled ? receivedMessages.length : result.messageCount,
-          };
+          });
           setTabs((current) =>
             current.map((item) =>
               item.nodeId === id && item.kind === "grpc" ? { ...item, streaming: false, lastResponse } : item
@@ -557,7 +553,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         } catch (error) {
           const errorText = String(error);
           const errorEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "error", json: errorText };
-          const lastResponse: GrpcResponseSummary = {
+          const lastResponse = await finish({
             ok: false,
             durationMs: null,
             sizeBytes: 0,
@@ -565,7 +561,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             body: "",
             error: errorText,
             compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
-          };
+          });
           setTabs((current) =>
             current.map((item) =>
               item.nodeId === id && item.kind === "grpc"
@@ -598,7 +594,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           });
           if (cancelRef.current) return;
           const receivedEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "received", json: result.json };
-          const lastResponse: GrpcResponseSummary = {
+          const lastResponse = await finish({
             ok: true,
             durationMs: result.durationMs,
             sizeBytes: new TextEncoder().encode(result.json).length,
@@ -606,14 +602,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             body: result.json,
             error: null,
             compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
-          };
+          });
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [sentEntry, receivedEntry], streaming: false, lastResponse } : x)));
           cacheGrpcResponse(id, lastResponse);
         } catch (e: any) {
           if (cancelRef.current) return;
           const errText = String(e);
           const errEntry: GrpcLogEntry = { id: uid(), timestamp: Date.now(), direction: "error", json: errText };
-          const lastResponse: GrpcResponseSummary = {
+          const lastResponse = await finish({
             ok: false,
             durationMs: null,
             sizeBytes: 0,
@@ -621,7 +617,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             body: "",
             error: errText,
             compression: tab.draft.settings.compression === "gzip" ? "gzip" : undefined,
-          };
+          });
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [sentEntry, errEntry], streaming: false, lastResponse } : x)));
           cacheGrpcResponse(id, lastResponse);
         } finally {
@@ -630,27 +626,30 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      const mockEntries: GrpcLogEntry[] = [];
       await simulateGrpcCall(
         {
           ...tab.draft,
           url: resolvedUrl,
           messageJson: resolvedMessageJson,
-          metadata: tab.draft.metadata.map((item) => ({
-            ...item,
-            key: substituteVars(item.key, variables) ?? item.key,
-            value: substituteVars(item.value, variables) ?? item.value,
-          })),
+          metadata: resolvedMetadata.map(([key, value]) => ({ id: uid(), key, value, enabled: true })),
         },
         (entry) => {
           if (cancelRef.current) return;
+          mockEntries.push(entry);
           setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, log: [...x.log, entry] } : x)));
         },
         () => cancelRef.current
       );
-      setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: false } : x)));
+      const received = mockEntries.filter((entry) => entry.direction === "received");
+      const error = mockEntries.find((entry) => entry.direction === "error")?.json ?? null;
+      const body = received.length === 1 ? received[0].json : JSON.stringify(received.map((entry) => JSON.parse(entry.json)), null, 2);
+      const lastResponse = await finish({ ok: !error && !cancelRef.current, durationMs: null, sizeBytes: new TextEncoder().encode(body).length, metadata: [], body, error, cancelled: cancelRef.current, messageCount: received.length });
+      setTabs((t) => t.map((x) => (x.nodeId === id && x.kind === "grpc" ? { ...x, streaming: false, lastResponse } : x)));
+      cacheGrpcResponse(id, lastResponse);
       grpcCancelRefs.current.delete(id);
     },
-    [tabs, workspace, cacheGrpcResponse]
+    [tabs, workspace, cacheGrpcResponse, safeMode, applyVariableChanges]
   );
 
   const cancelGrpcTab = useCallback(async (id: string) => {

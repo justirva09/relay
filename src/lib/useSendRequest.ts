@@ -1,5 +1,5 @@
 import CryptoJS from "crypto-js";
-import { buildPm, substituteVars, substitutePathParams, TestResultDraft } from "./pm";
+import { buildRelay, substituteVars, substitutePathParams, TestResultDraft } from "./pm";
 import { sendHttpRequest } from "./tauri";
 import { runInSandbox } from "./scriptSandbox";
 import { AuthConfig, Example, KVRow, RequestData, ResponseState, SentRequest, StoredCookie, Workspace, encodeUrlencodedRows } from "../types";
@@ -38,8 +38,9 @@ export async function runTestScriptAgainstExample(testScript: string, variables:
   const testResults: TestResultDraft[] = [];
   const noop = () => {};
   try {
-    const fn = new Function("pm", "console", "require", testScript);
-    fn(buildPm({ variables: varsObj, response: scriptResponse, testResults }), { log: noop, info: noop, warn: noop, error: noop }, scriptRequire);
+    const fn = new Function("relay", "pm", "console", "require", testScript);
+    const api = buildRelay({ variables: varsObj, response: scriptResponse, testResults });
+    fn(api, api, { log: noop, info: noop, warn: noop, error: noop }, scriptRequire);
   } catch (e: any) {
     testResults.push({ name: "Test script error", passed: false, error: e?.message ?? String(e) });
   }
@@ -150,8 +151,9 @@ export async function runRequest(
       }
     } else {
       try {
-        const fn = new Function("pm", "console", "require", req.preScript);
-        fn(buildPm({ variables: varsObj, scriptRequest }), consoleWrap, requireShim);
+        const fn = new Function("relay", "pm", "console", "require", req.preScript);
+        const api = buildRelay({ variables: varsObj, scriptRequest });
+        fn(api, api, consoleWrap, requireShim);
       } catch (e: any) {
         preError = e.message;
       }
@@ -259,8 +261,9 @@ export async function runRequest(
         }
       } else {
         try {
-          const fn = new Function("pm", "console", "require", req.testScript);
-          fn(buildPm({ variables: varsObj, response: scriptResponse, testResults }), consoleWrap, requireShim);
+          const fn = new Function("relay", "pm", "console", "require", req.testScript);
+          const api = buildRelay({ variables: varsObj, response: scriptResponse, testResults });
+          fn(api, api, consoleWrap, requireShim);
         } catch (e: any) {
           logs.push(`Test script error: ${e.message}`);
         }

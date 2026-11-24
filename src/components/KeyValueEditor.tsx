@@ -101,6 +101,7 @@ export function ValueInput({ value, onChange, placeholder, variables, variableIn
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const overlayContentRef = useRef<HTMLSpanElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
   const { menu, recompute, close, move, hover, apply } = useVariableMenu(variables);
@@ -109,7 +110,9 @@ export function ValueInput({ value, onChange, placeholder, variables, variableIn
   const modifierHeld = useModifierHeld();
 
   const syncScroll = () => {
-    if (inputRef.current && overlayRef.current) overlayRef.current.scrollLeft = inputRef.current.scrollLeft;
+    if (inputRef.current && overlayContentRef.current) {
+      overlayContentRef.current.style.transform = `translateX(${-inputRef.current.scrollLeft}px)`;
+    }
   };
 
   useLayoutEffect(syncScroll, [value]);
@@ -127,7 +130,7 @@ export function ValueInput({ value, onChange, placeholder, variables, variableIn
   };
 
   return (
-    <div ref={wrapRef} className="relative flex-1 min-w-0">
+    <div ref={wrapRef} className="relative flex-1 min-w-0 max-w-full">
       <div
         className={`relative overflow-hidden bg-th-surface border rounded-md ${focused ? "border-th-border-focus" : "border-th-border-input"}`}
         onClick={(e) => {
@@ -142,8 +145,12 @@ export function ValueInput({ value, onChange, placeholder, variables, variableIn
           inputRef.current?.focus();
         }}
       >
-        <div ref={overlayRef} className="px-2.5 py-1.5 text-[13px] font-mono whitespace-pre overflow-hidden pointer-events-none" aria-hidden>
-          {value ? highlightUrlTokens(value, false, variables) : <span className="text-th-text-4">{placeholder}</span>}
+        <div ref={overlayRef} className="px-2.5 py-1.5 text-[13px] font-mono pointer-events-none" aria-hidden>
+          <span className="block overflow-hidden whitespace-pre">
+            <span ref={overlayContentRef} className="block w-max whitespace-pre">
+              {value ? highlightUrlTokens(value, false, variables) : <span className="text-th-text-4">{placeholder}</span>}
+            </span>
+          </span>
         </div>
         <input
           ref={inputRef}
@@ -166,6 +173,7 @@ export function ValueInput({ value, onChange, placeholder, variables, variableIn
           onFocus={() => { setFocused(true); syncScroll(); }}
           onBlur={() => { setFocused(false); close(); }}
           placeholder={placeholder}
+          spellCheck={false}
           className="absolute inset-0 w-full h-full px-2.5 py-1.5 text-[13px] font-mono bg-transparent text-transparent caret-th-text-1 focus:outline-none disabled:cursor-not-allowed"
           style={{ caretColor: "var(--c-text-1)", cursor: hovered && modifierHeld ? "pointer" : undefined }}
         />
@@ -267,8 +275,8 @@ export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, pla
         />
       ) : (
         <>
-          <div className="overflow-x-auto border border-th-border rounded-md">
-            <table className="w-full border-collapse text-[13px] font-mono">
+          <div className="min-w-0 overflow-x-auto border border-th-border rounded-md">
+            <table className="w-full table-fixed border-collapse text-[13px] font-mono">
               <thead>
                 <tr className="border-b border-th-border">
                   {showToggle && <th className="w-8 px-2 py-2" />}
@@ -296,7 +304,7 @@ export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, pla
                           </div>
                         </td>
                       )}
-                      <td className="px-2 py-1.5 align-middle">
+                      <td className="px-2 py-1.5 align-middle min-w-0">
                         {keySuggestions ? (
                           <KeyNameInput
                             value={r.key}
@@ -315,7 +323,7 @@ export default function KeyValueEditor({ rows, onChangeRows, placeholderKey, pla
                           />
                         )}
                       </td>
-                      <td className="px-2 py-1.5 align-middle">
+                      <td className="px-2 py-1.5 align-middle min-w-0">
                         <ValueInput
                           value={locked ? "managed by Auth tab" : r.value}
                           onChange={(v) => update(r.id, "value", v)}

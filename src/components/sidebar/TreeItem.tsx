@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { GrpcMethodType, GrpcRequestNode, TreeNode } from "../../types";
 import { useWorkspace } from "../../store";
 import { AddRequestDropdown } from "./AddRequestDropdown";
@@ -23,9 +23,34 @@ const GRPC_METHOD_BADGE: Record<GrpcMethodType, { icon: string; color: string; l
   bidi: { icon: "↕", color: "text-violet-400", label: "Bidirectional streaming" },
 };
 
-export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEdit, onDelete, draggingIds, dropInfo, selectedIds, onItemMouseDown, onItemClick, onAddFromCurl, onImportGrpc, onInspectGrpc }: {
+// Keep keystrokes local to the input. A folder row owns its entire subtree,
+// so storing the draft in TreeItem would rerender every descendant on each key.
+function RenameField({ name, onDone }: { name: string; onDone: (value: string | null) => void }) {
+  const [value, setValue] = useState(name);
+  const finished = useRef(false);
+  const finish = (next: string | null) => {
+    if (finished.current) return;
+    finished.current = true;
+    onDone(next);
+  };
+  return <input
+    autoFocus
+    value={value}
+    onClick={(e) => e.stopPropagation()}
+    onChange={(e) => setValue(e.target.value)}
+    onBlur={() => finish(value)}
+    onKeyDown={(e) => {
+      if (e.key === "Enter") finish(value);
+      if (e.key === "Escape") finish(null);
+    }}
+    className="flex-1 bg-th-surface border border-th-accent-border rounded px-1 py-0.5 text-th-text-1 text-[13px] focus:outline-none"
+  />;
+}
+
+export function TreeItem({ node, depth, flat = false, onCtxMenu, triggerEditId, clearTriggerEdit, onDelete, draggingIds, dropInfo, selectedIds, onItemMouseDown, onItemClick, onAddFromCurl, onImportGrpc, onInspectGrpc, onCreateKind }: {
   node: TreeNode;
   depth: number;
+  flat?: boolean;
   onCtxMenu: (e: React.MouseEvent, node: TreeNode) => void;
   triggerEditId: string | null;
   clearTriggerEdit: () => void;
@@ -38,24 +63,22 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
   onAddFromCurl: (parentId: string) => void;
   onImportGrpc: (parentId: string) => void;
   onInspectGrpc: (node: GrpcRequestNode) => void;
+  onCreateKind?: (kind: "http" | "grpc") => void;
 }) {
   const { addFolder, addRequest, addGrpcRequest, renameNode, toggleCollapse, openTab, activeTabId, tabs } = useWorkspace();
   const [editing, setEditing] = useState(false);
-  const [editVal, setEditVal] = useState(node.name);
   const [hover, setHover] = useState(false);
 
   useEffect(() => {
     if (triggerEditId === node.id) {
       setEditing(true);
-      setEditVal(node.name);
       clearTriggerEdit();
     }
   }, [triggerEditId, node.id, node.name, clearTriggerEdit]);
 
-  const commitRename = () => {
+  const commitRename = (value: string | null) => {
     setEditing(false);
-    if (editVal.trim() && editVal !== node.name) renameNode(node.id, editVal.trim());
-    else setEditVal(node.name);
+    if (value?.trim() && value !== node.name) renameNode(node.id, value.trim());
   };
 
   const isDragging = draggingIds?.has(node.id) ?? false;
@@ -77,7 +100,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
           data-tree-id={node.id}
           data-tree-kind="folder"
           onMouseDown={handleMouseDown}
-          className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] transition-colors select-none ${
+          className={`group flex h-8 items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer text-[13px] transition-colors select-none ${
             isDragging ? "opacity-30" : "opacity-100"
           } ${
             dropPos === "inside" ? "bg-th-accent-bg ring-1 ring-th-accent-border" : isSelected ? "bg-th-accent-bg" : "hover:bg-th-hover"
@@ -94,18 +117,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
         >
           <FolderIcon open={!node.collapsed} />
           {editing ? (
-            <input
-              autoFocus
-              value={editVal}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => setEditVal(e.target.value)}
-              onBlur={commitRename}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitRename();
-                if (e.key === "Escape") { setEditing(false); setEditVal(node.name); }
-              }}
-              className="flex-1 bg-th-surface border border-th-accent-border rounded px-1 py-0.5 text-th-text-1 text-[13px] focus:outline-none"
-            />
+            <RenameField name={node.name} onDone={commitRename} />
           ) : (
             <span className="flex-1 truncate text-th-text-1" onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}>
               {node.name}
@@ -115,8 +127,8 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
             <div className="flex items-center gap-0.5 opacity-80">
               <AddRequestDropdown
                 title="New request"
-                onAddHttp={() => addRequest(node.id)}
-                onAddGrpc={() => addGrpcRequest(node.id)}
+                onAddHttp={() => { onCreateKind?.("http"); addRequest(node.id); }}
+                onAddGrpc={() => { onCreateKind?.("grpc"); addGrpcRequest(node.id); }}
                 onImportGrpc={() => onImportGrpc(node.id)}
                 onAddFromCurl={() => onAddFromCurl(node.id)}
                 className="h-5 w-5 grid place-items-center rounded text-th-text-3 hover:text-th-accent-text hover:bg-th-accent-bg"
@@ -138,7 +150,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
             </div>
           )}
         </div>
-        {!node.collapsed && (
+        {!flat && !node.collapsed && (
           <div>
             {node.children.length === 0 && (
               <div className="text-[11.5px] text-th-text-4 font-mono" style={{ paddingLeft: 8 + (depth + 1) * 14 }}>
@@ -146,7 +158,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
               </div>
             )}
             {node.children.map((c) => (
-              <TreeItem key={c.id} node={c} depth={depth + 1} onCtxMenu={onCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={clearTriggerEdit} onDelete={onDelete} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={onItemMouseDown} onItemClick={onItemClick} onAddFromCurl={onAddFromCurl} onImportGrpc={onImportGrpc} onInspectGrpc={onInspectGrpc} />
+              <TreeItem key={c.id} node={c} depth={depth + 1} onCtxMenu={onCtxMenu} triggerEditId={triggerEditId} clearTriggerEdit={clearTriggerEdit} onDelete={onDelete} draggingIds={draggingIds} dropInfo={dropInfo} selectedIds={selectedIds} onItemMouseDown={onItemMouseDown} onItemClick={onItemClick} onAddFromCurl={onAddFromCurl} onImportGrpc={onImportGrpc} onInspectGrpc={onInspectGrpc} onCreateKind={onCreateKind} />
             ))}
           </div>
         )}
@@ -165,7 +177,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
         data-tree-id={node.id}
         data-tree-kind="grpc"
         onMouseDown={handleMouseDown}
-        className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] select-none ${
+        className={`group flex h-8 items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer text-[13px] select-none ${
           isDragging ? "opacity-30" : "opacity-100"
         } ${
           isSelected || (isActive && !isDropTarget) ? "bg-th-accent-bg" : !isDropTarget ? "hover:bg-th-hover" : ""
@@ -187,18 +199,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
           {methodBadge.icon}
         </span>
         {editing ? (
-          <input
-            autoFocus
-            value={editVal}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setEditVal(e.target.value)}
-            onBlur={commitRename}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitRename();
-              if (e.key === "Escape") { setEditing(false); setEditVal(node.name); }
-            }}
-            className="flex-1 bg-th-surface border border-th-accent-border rounded px-1 py-0.5 text-th-text-1 text-[13px] focus:outline-none"
-          />
+          <RenameField name={node.name} onDone={commitRename} />
         ) : (
           <span
             className={`flex-1 truncate ${isActive || isOpen ? "text-th-text-1" : "text-th-text-2"}`}
@@ -236,7 +237,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
       data-tree-id={node.id}
       data-tree-kind="request"
       onMouseDown={handleMouseDown}
-      className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] select-none ${
+      className={`group flex h-8 items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer text-[13px] select-none ${
         isDragging ? "opacity-30" : "opacity-100"
       } ${
         isSelected || (isActive && !isDropTarget) ? "bg-th-accent-bg" : !isDropTarget ? "hover:bg-th-hover" : ""
@@ -253,18 +254,7 @@ export function TreeItem({ node, depth, onCtxMenu, triggerEditId, clearTriggerEd
     >
       <span className={`font-mono text-[10.5px] font-bold w-9 shrink-0 ${METHOD_COLOR[node.request.method]}`}>{node.request.method}</span>
       {editing ? (
-        <input
-          autoFocus
-          value={editVal}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => setEditVal(e.target.value)}
-          onBlur={commitRename}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commitRename();
-            if (e.key === "Escape") { setEditing(false); setEditVal(node.name); }
-          }}
-          className="flex-1 bg-th-surface border border-th-accent-border rounded px-1 py-0.5 text-th-text-1 text-[13px] focus:outline-none"
-        />
+        <RenameField name={node.name} onDone={commitRename} />
       ) : (
         <span
           className={`flex-1 truncate ${isActive || isOpen ? "text-th-text-1" : "text-th-text-2"}`}
